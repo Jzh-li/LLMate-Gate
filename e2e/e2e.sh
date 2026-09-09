@@ -10,19 +10,36 @@
 #   4. llmate-gate :8402 (pii-engineer + mock-detector.yaml 配置)
 #
 # 前置：
-#   - llmate-gate.exe / mock-llm.exe / mock-detector.exe 已构建
-#     （默认位置 /c/Users/jzh-l/AppData/Local/Temp/lmgate，可由 LMGATE_BUILD 覆盖）
+#   - llmate-gate[.exe] / mock-llm[.exe] / mock-detector[.exe] 已构建
+#     （默认位置 $REPO/build，Windows 下可用 LMGATE_BUILD 指向
+#      C:/Users/<u>/AppData/Local/Temp/lmgate）
 #   - e2e configs 在 gateway/configs/ 下（dev.sh sync 已同步）
+#
+# 跨平台：Linux/macOS/Windows(git-bash) 均可运行，CI 与本地同一份脚本。
 
 set -uo pipefail
 
-BUILD_DIR="${LMGATE_BUILD:-C:/Users/jzh-l/AppData/Local/Temp/lmgate}"
-LLMATE_BIN="${BUILD_DIR}/llmate-gate.exe"
-MOCK_LLM_BIN="${BUILD_DIR}/mock-llm.exe"
-MOCK_DET_BIN="${BUILD_DIR}/mock-detector.exe"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-E2E_LLM_CFG="${BUILD_DIR}/gateway/configs/e2e-llm.yaml"
-E2E_DET_CFG="${BUILD_DIR}/gateway/configs/e2e-detector.yaml"
+# Windows 平台判定（git-bash / MSYS / Cygwin）
+case "$(uname -s 2>/dev/null || echo unknown)" in
+  MINGW*|MSYS*|CYGWIN*) EXE=".exe" ;;
+  *) EXE="" ;;
+esac
+
+BUILD_DIR="${LMGATE_BUILD:-${REPO_ROOT}/build}"
+LLMATE_BIN="${BUILD_DIR}/llmate-gate${EXE}"
+MOCK_LLM_BIN="${BUILD_DIR}/mock-llm${EXE}"
+MOCK_DET_BIN="${BUILD_DIR}/mock-detector${EXE}"
+
+# 配置：优先用仓库内的 configs（Linux/CI），Windows scratch 布局时回落到 scratch
+if [ -f "${REPO_ROOT}/gateway/configs/e2e-llm.yaml" ]; then
+  E2E_LLM_CFG="${REPO_ROOT}/gateway/configs/e2e-llm.yaml"
+  E2E_DET_CFG="${REPO_ROOT}/gateway/configs/e2e-detector.yaml"
+else
+  E2E_LLM_CFG="${BUILD_DIR}/gateway/configs/e2e-llm.yaml"
+  E2E_DET_CFG="${BUILD_DIR}/gateway/configs/e2e-detector.yaml"
+fi
 
 LLM_PORT=8999
 GW1_PORT=8401
@@ -33,13 +50,16 @@ TOKEN="$GATEWAY_AUTH_TOKEN"
 GW1="http://127.0.0.1:${GW1_PORT}"
 GW2="http://127.0.0.1:${GW2_PORT}"
 
+# Python 解释器：ubuntu-latest 只有 python3，Windows git-bash 通常只有 python
+PYTHON="${PYTHON:-$(command -v python3 2>/dev/null || command -v python 2>/dev/null || echo python)}"
+
 PASSED=0
 FAILED=0
 FAIL_MSGS=()
 
 assert_match() {
   local needle="$1" haystack="$2" name="$3"
-  python -c "import sys; sys.exit(0 if sys.argv[1] in sys.argv[2] else 1)" "$needle" "$haystack" >/dev/null 2>&1
+  "$PYTHON" -c "import sys; sys.exit(0 if sys.argv[1] in sys.argv[2] else 1)" "$needle" "$haystack" >/dev/null 2>&1
   local rc=$?
   if [ $rc -eq 0 ]; then
     echo "  PASS $name"
@@ -53,7 +73,7 @@ assert_match() {
 
 assert_nomatch() {
   local needle="$1" haystack="$2" name="$3"
-  python -c "import sys; sys.exit(0 if sys.argv[1] not in sys.argv[2] else 1)" "$needle" "$haystack" >/dev/null 2>&1
+  "$PYTHON" -c "import sys; sys.exit(0 if sys.argv[1] not in sys.argv[2] else 1)" "$needle" "$haystack" >/dev/null 2>&1
   local rc=$?
   if [ $rc -eq 0 ]; then
     echo "  PASS $name"
@@ -67,7 +87,7 @@ assert_nomatch() {
 
 assert_re_match() {
   local pat="$1" haystack="$2" name="$3"
-  python -c "import re,sys; sys.exit(0 if re.search(sys.argv[1], sys.argv[2]) else 2)" "$pat" "$haystack" >/dev/null 2>&1
+  "$PYTHON" -c "import re,sys; sys.exit(0 if re.search(sys.argv[1], sys.argv[2]) else 2)" "$pat" "$haystack" >/dev/null 2>&1
   local rc=$?
   if [ $rc -eq 0 ]; then
     echo "  PASS $name"
@@ -81,7 +101,7 @@ assert_re_match() {
 
 assert_re_nomatch() {
   local pat="$1" haystack="$2" name="$3"
-  python -c "import re,sys; sys.exit(0 if not re.search(sys.argv[1], sys.argv[2]) else 2)" "$pat" "$haystack" >/dev/null 2>&1
+  "$PYTHON" -c "import re,sys; sys.exit(0 if not re.search(sys.argv[1], sys.argv[2]) else 2)" "$pat" "$haystack" >/dev/null 2>&1
   local rc=$?
   if [ $rc -eq 0 ]; then
     echo "  PASS $name"
@@ -114,15 +134,22 @@ wait_listen() {
 decoded_received() {
   local body
   body=$(curl -fsS "http://127.0.0.1:${LLM_PORT}/_received" 2>/dev/null) || return 0
-  python -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('body',''))" "$body" 2>/dev/null
+  "$PYTHON" -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('body',''))" "$body" 2>/dev/null
 }
 
 cleanup_all() {
   set +e
-  PIDS=$(tasklist 2>&1 | grep -iE 'llmate-gate|mock-(llm|detector)' | awk '{print $2}')
-  for PID in $PIDS; do
-    taskkill /PID "$PID" /F >/dev/null 2>&1
-  done
+  if [ -n "$EXE" ]; then
+    PIDS=$(tasklist 2>&1 | grep -iE 'llmate-gate|mock-(llm|detector)' | awk '{print $2}')
+    for PID in $PIDS; do
+      taskkill /PID "$PID" /F >/dev/null 2>&1
+    done
+  else
+    pkill -f 'llmate-gate'  >/dev/null 2>&1
+    pkill -f 'mock-llm'     >/dev/null 2>&1
+    pkill -f 'mock-detector' >/dev/null 2>&1
+  fi
+  return 0
 }
 trap cleanup_all EXIT
 

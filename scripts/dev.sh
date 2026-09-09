@@ -71,19 +71,10 @@ envcheck() {
 sync() {
   log "sync $REPO_ROOT/gateway -> $SRC_DIR"
   mkdir -p "$BUILD_DIR"
-  # 保留 SRC_DIR 的 go.sum（9P UNC 不支持 go mod tidy，源码库不带 go.sum）。
-  # 否则每次 sync 都会让 build 因 go.sum 缺失失败。
-  local GO_SUM_BACKUP=""
-  if [ -f "$SRC_DIR/go.sum" ]; then
-    GO_SUM_BACKUP=$(mktemp)
-    cp "$SRC_DIR/go.sum" "$GO_SUM_BACKUP"
-  fi
+  # go.sum 已入库（CI 干净 checkout 必需），随源码一起同步。
+  [ -f "$REPO_ROOT/gateway/go.sum" ] || log "WARN gateway/go.sum 缺失，构建可能失败"
   rm -rf "$SRC_DIR"
   cp -r "$REPO_ROOT/gateway" "$SRC_DIR"
-  if [ -n "$GO_SUM_BACKUP" ]; then
-    cp "$GO_SUM_BACKUP" "$SRC_DIR/go.sum"
-    rm -f "$GO_SUM_BACKUP"
-  fi
   log "sync done"
 }
 

@@ -8,6 +8,7 @@ cover.html
 
 # 本地运行产物
 vault_data/
+vault_data_e2e*/
 audit.log
 *.log
 .env
@@ -20,9 +21,9 @@ target/
 # 敏感 fixture（仅本地使用）
 **/testdata/private/
 
-# WorkBuddy 本地数据 + 9P 构建产物（scratch 内 go.sum 由 dev.sh sync 维护）
+# WorkBuddy 本地数据
+# 注意：gateway/go.sum 必须入库，否则 CI（干净 checkout）无法 go mod verify / go test
 .workbuddy/
-gateway/go.sum
 
 # 编辑器
 .vscode/

@@ -15,8 +15,12 @@ TOKEN="ui-smoke-$$"
 export GATEWAY_AUTH_TOKEN="$TOKEN"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BUILD_DIR="${LMGATE_BUILD:-/c/Users/jzh-l/AppData/Local/Temp/lmgate}"
-BIN="${BUILD_DIR}/llmate-gate.exe"
+case "$(uname -s 2>/dev/null || echo unknown)" in
+  MINGW*|MSYS*|CYGWIN*) EXE=".exe" ;;
+  *) EXE="" ;;
+esac
+BUILD_DIR="${LMGATE_BUILD:-${ROOT}/build}"
+BIN="${BUILD_DIR}/llmate-gate${EXE}"
 [ -x "$BIN" ] || BIN="${BUILD_DIR}/llmate-gate"
 if [ ! -x "$BIN" ]; then
   echo "FAIL: binary not found at $BIN, run scripts/dev.sh build first" >&2

@@ -256,6 +256,15 @@ func (s *Session) Replace(text string, ents []types.Entity) (string, []types.Map
 	return sb.String(), s.entries, nil
 }
 
+// Entries 返回本次会话累积的全部映射条目（供调用方落盘 vault / 外部集成点使用）。
+func (s *Session) Entries() []types.MappingEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]types.MappingEntry, len(s.entries))
+	copy(out, s.entries)
+	return out
+}
+
 // fateFor 决定实体命运（技术方案 §5 per-type fate + 契约 §6.1）。
 func (s *Session) fateFor(entityType, strategy string) types.Fate {
 	if s.cfg.Policy != nil {

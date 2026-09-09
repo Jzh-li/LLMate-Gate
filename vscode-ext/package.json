@@ -1,0 +1,73 @@
+{
+  "name": "llmate-gate",
+  "displayName": "LLMate Gate",
+  "description": "将 Continue / Cursor 等 OpenAI 兼容请求的 base_url 指向本地 LLMate Gate 隐私网关（localhost:8400），并管理网关守护进程。",
+  "version": "0.1.0",
+  "publisher": "llmate",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Privacy"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "llmateGate.enable",
+        "title": "LLMate Gate: 启用（指向本地网关）"
+      },
+      {
+        "command": "llmateGate.disable",
+        "title": "LLMate Gate: 停用"
+      },
+      {
+        "command": "llmateGate.openDashboard",
+        "title": "LLMate Gate: 打开调试面板"
+      }
+    ],
+    "configuration": {
+      "title": "LLMate Gate",
+      "properties": {
+        "llmateGate.gatewayBinaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "llmate-gate 可执行文件路径；留空则按 PATH 查找（llmate-gate / llmate-gate.exe）。"
+        },
+        "llmateGate.gatewayPort": {
+          "type": "number",
+          "default": 8400,
+          "description": "网关监听端口。"
+        },
+        "llmateGate.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "VS Code 启动时自动拉起网关（若未运行）。"
+        },
+        "llmateGate.configPath": {
+          "type": "string",
+          "default": "",
+          "description": "网关配置文件（YAML）路径；留空则不带 --config 启动（使用内置默认值）。"
+        },
+        "llmateGate.authToken": {
+          "type": "string",
+          "default": "",
+          "description": "网关 auth_token；留空则不带鉴权启动（仅本地可信网络建议）。"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}

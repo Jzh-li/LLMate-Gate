@@ -2,9 +2,9 @@
 
 > 探路者 Loop 的进度追踪（执行手册 §"进度追踪"）。每完成一阶段更新一次。
 
-## 当前阶段：Phase 2 · 阶段 2（tool-call 脱敏 + per-type fate + Merkle 增量）已完成
+## 当前阶段：Phase 2 · 阶段 3（VS Code 扩展 + Claude Code hooks + 常驻隐私端点）已完成
 
-## 当前任务：Phase 2 阶段 1+2 完成（跨 SSE 还原 + tool-call 逐值脱敏 + per-type fate 配置化 + detection_cache Merkle 增量），下一步 Phase 2 阶段 3（VS Code 扩展 + Claude Code hooks）
+## 当前任务：Phase 2 全阶段收口（跨 SSE 还原 + tool-call 逐值脱敏 + per-type fate + Merkle 增量 + 常驻隐私端点 + Claude Code hooks + VS Code 扩展）。下一步：Phase 3 MCP 门面（任务 3.1，v1.1）
 
 ## 状态：执行中
 
@@ -140,11 +140,45 @@ redact + 可逆占位符）、`TestProxy_ToolCall_ArgumentsObject`（对象形�
 ### 进行中
 
 - [x] Phase 2 阶段 2：tool-call 参数逐值脱敏（键保留）、per-type fate 配置化、detection_cache Merkle 增量
-- [ ] Phase 2 阶段 3：VS Code 扩展 + Claude Code hooks（执行手册任务 2.1 / 2.2）
+- [x] Phase 2 阶段 3：VS Code 扩展 + Claude Code hooks（执行手册任务 2.1 / 2.2）
 
+#### Phase 2 阶段 3：常驻隐私端点 + Claude Code hooks + VS Code 扩展
 
+对应执行手册任务 2.1（VS Code 扩展）/ 2.2（Claude Code hooks）。三项子交付：
 
-- [ ] Phase 2：tool-call 递归扫描 / per-type fate / VS Code 扩展 / Claude Code hooks
+**1. 常驻隐私端点（网关侧，前置基础）** — `gateway/internal/proxy/privacy.go` + `server.go`
+- 新增 `POST /v1/privacy/redact` 与 `POST /v1/privacy/restore`，**常驻可用、不受 `--no-debug` 门控**
+  （`/debug` 的 `/_api/replace`、`/_api/detect` 仅调试期存在，故另行提供生产期端点）。
+- 复用 `pipeline` 核心（`DetectText` / `replacer.Session` / `vault`），与代理层占位符协议完全一致：
+  递归扫描任意嵌套 JSON（**键保留、仅字符串值脱敏**），按 `request_id` 落盘 vault 供还原。
+- 修复：`json.Marshal` 默认把 `<` 转成 `\u003c`，导致 redact 输出占位符被转义 → 改为
+  `marshalNoEscape`（`SetEscapeHTML(false)`），redact 输出字面 `<<type_index>>`，与契约一致。
+
+**2. Claude Code hooks** — `hooks/`（任务 2.2）
+- `lmgate_hook.py`：stdlib-only（零外部依赖）。PreToolUse 递归扫描 `tool_input`，检出 PII
+  默认 `deny` 并附脱敏预览（fail-closed 闸门）；可选 `LMGATE_HOOK_MODE=redact` 以 `updatedInput`
+  整体回写脱敏参数（工具以占位符运行）。PostToolUse 扫描 `tool_output`，检出 PII 经
+  `systemMessage` 告警（协议限制：无法改写已产生的 tool_result）。
+- `pre-tool.sh` / `post-tool.sh`：薄壳，委派给 `lmgate_hook.py`。
+- `settings.json.example` + `README.md`：安装、环境变量、协议约束说明。
+- 端到端自测（直喂 hook 事件 JSON 对本地网关）：block/allow、`updatedInput` 脱敏、Write 的
+  `file_path` 保留、PostToolUse 告警 6 项全通过。
+
+**3. VS Code 扩展** — `vscode-ext/`（任务 2.1）
+- `package.json` / `tsconfig.json` / `src/extension.ts` / `README.md`。
+- 激活后弹窗提示启用；确认后把 Continue 的 OpenAI 兼容模型 `apiBase` 指向
+  `http://localhost:<port>/v1`，并管理网关守护进程启停、状态栏显示、调试面板入口。
+- `tsc -p ./` 编译零错误（已装 `@types/node` + `@types/vscode` 验证）。
+
+**协议约束修正**：早期假设 hook 不能改写工具入参，故只做 PII 闸门；经核对 Claude Code hook
+协议，`PreToolUse` 实际支持 `updatedInput` 整体替换，故 `redact` 模式可透明脱敏后执行，
+`block` 模式为更安全的默认（拦截 + 脱敏预览，用户可手动放行）。真正的「入参脱敏 + 出参还原」
+透明替换由扩展的代理路径（`base_url -> localhost:8400`）承担，hook 为边界兜底。
+
+**验证**：`dev.sh build` 通过 / 本地网关 :8600 实测 redact→`<<zh_phone_1>>`/`<<email_1>>` 字面输出、
+restore 还原原文 / hooks 6 项断言全绿 / 扩展 `tsc` 零错误。
+
+- [x] Phase 2：tool-call 递归扫描 / per-type fate / VS Code 扩展 / Claude Code hooks 全部落地
 
 ### 探路记录
 

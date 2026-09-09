@@ -1,0 +1,24 @@
+{
+  "PreToolUse": [
+    {
+      "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|WebSearch",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "bash /absolute/path/to/LLMate-Gate/hooks/pre-tool.sh"
+        }
+      ]
+    }
+  ],
+  "PostToolUse": [
+    {
+      "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit|WebFetch|WebSearch|Read",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "bash /absolute/path/to/LLMate-Gate/hooks/post-tool.sh"
+        }
+      ]
+    }
+  ]
+}

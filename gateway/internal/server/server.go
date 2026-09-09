@@ -67,6 +67,10 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/v1/models", wrap(s.proxy.Passthrough))
 	s.mux.HandleFunc("/healthz", s.handleHealthz)
 	s.mux.Handle("/metrics", s.metricsHandler())
+	// 常驻隐私 API（不受 --no-debug 门控，auth 中间件已覆盖）：供 Claude Code hooks /
+	// VS Code 扩展等外部集成点递归脱敏与还原任意 JSON / 文本。
+	s.mux.HandleFunc("/v1/privacy/redact", s.proxy.PrivacyRedact)
+	s.mux.HandleFunc("/v1/privacy/restore", s.proxy.PrivacyRestore)
 }
 
 // handleLLM 包装 LLM 端点：先读 body 判定 stream，再交由 proxy 处理。

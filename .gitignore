@@ -17,6 +17,7 @@ audit.log
 node_modules/
 dist/
 target/
+vscode-ext/out/
 
 # 敏感 fixture（仅本地使用）
 **/testdata/private/

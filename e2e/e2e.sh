@@ -240,7 +240,7 @@ echo
 echo "[E3] SSE stream: rune-chunked placeholder -> client should see original PII"
 # mock-llm 把响应切成 8-rune chunks，<<email_1>> 会被拆到多个 SSE 事件里；
 # 网关必须在「内容维度」跨事件还原（SSE 帧不属于内容，不能污染占位符字节）。
-SKIP_E3="${SKIP_E3:-1}"  # TODO(Phase2-2.4): 跨 SSE 事件还原修好后改为 0
+SKIP_E3="${SKIP_E3:-0}"
 curl -fsS "http://127.0.0.1:${LLM_PORT}/_received/all?reset=1" >/dev/null 2>&1 || true
 E3_RAW=$(curl -fsS -m 10 -N -X POST "$GW1/v1/chat/completions" \
   -H "Authorization: Bearer $TOKEN" \
@@ -251,7 +251,7 @@ UP3=$(decoded_received)
 if [ "$SKIP_E3" = "1" ]; then
   echo "  [E3] SKIP (SKIP_E3=1)"
 else
-  if [ -n "$E3_DEBUG" ]; then echo "  [E3][debug] raw=$E3_RAW"; fi
+  if [ -n "${E3_DEBUG:-}" ]; then echo "  [E3][debug] raw=$E3_RAW"; fi
   assert_re_match '<<email_[0-9]+>>' "$UP3" "E3 upstream body contains email placeholder"
   assert_match "zhangsan@example.com" "$E3_RAW" "E3 stream response contains original PII (email)"
   assert_re_nomatch '<<email_[0-9]+>>' "$E3_RAW" "E3 stream response has no raw placeholder leak"

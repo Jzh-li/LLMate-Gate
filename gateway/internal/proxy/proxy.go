@@ -297,6 +297,16 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, resp *http.Response, endpo
 	w.WriteHeader(resp.StatusCode)
 	flusher.Flush()
 
+	// SSE 帧感知：占位符常被拆到多个事件里（帧结构会插在占位符中间），
+	// 必须在「内容维度」跨事件还原，否则客户端会看到半截占位符。
+	var streamWriter interface {
+		Write([]byte) ([]byte, error)
+		Close() ([]byte, error)
+	} = restorer
+	if isEventStream(resp.Header.Get("Content-Type")) {
+		streamWriter = replacer.NewSSERestorer(restorer)
+	}
+
 	reader := bufio.NewReaderSize(resp.Body, 32*1024)
 	buf := make([]byte, 16*1024)
 	var upstreamSb strings.Builder
@@ -305,7 +315,7 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, resp *http.Response, endpo
 		if n > 0 {
 			chunk := buf[:n]
 			upstreamSb.Write(chunk)
-			out, _ := restorer.Write(chunk)
+			out, _ := streamWriter.Write(chunk)
 			if len(out) > 0 {
 				_, _ = w.Write(out)
 				flusher.Flush()
@@ -315,7 +325,7 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, resp *http.Response, endpo
 			break
 		}
 	}
-	rest, _ := restorer.Close()
+	rest, _ := streamWriter.Close()
 	if len(rest) > 0 {
 		_, _ = w.Write(rest)
 		flusher.Flush()
@@ -343,6 +353,11 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, resp *http.Response, endpo
 }
 
 // ---- 工具函数 ----
+
+// isEventStream 判断上游是否以 SSE 帧返回（决定要不要做帧感知还原）。
+func isEventStream(contentType string) bool {
+	return strings.Contains(strings.ToLower(contentType), "text/event-stream")
+}
 
 func (p *Proxy) upstreamFor(path string) string {
 	u := *p.upstream

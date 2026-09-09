@@ -21,6 +21,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -183,6 +184,18 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	_ = enc.Encode(v)
 }
 
+// jsonLiteral 序列化为单行 JSON 字面（关闭 HTML 转义、去掉尾部换行）。
+// 注意：json.Marshal 会把 < > 转成 \u003c \u003e，占位符 <<...>> 会被破坏。
+func jsonLiteral(v interface{}) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+}
+
 // handleChat OpenAI /v1/chat/completions。
 // stream=false: 一次性返回 {choices:[{message:{role:"assistant", content:回显}}]}
 // stream=true:  返回 SSE 事件序列，每行一段增量 + DONE
@@ -210,8 +223,6 @@ func handleChat(w http.ResponseWriter, r *http.Request, body []byte, dumpHeaders
 		flusher, _ := w.(http.Flusher)
 		// 切 token 流：逐字 + 模拟跨块
 		tokens := chunkTokens(echo, 8)
-		enc := json.NewEncoder(w)
-		enc.SetEscapeHTML(false) // 必须保留 `<<` / `>>` 字面 — StreamRestorer 才能识别占位符
 		for _, t := range tokens {
 			evt := map[string]interface{}{
 				"id":      id,
@@ -222,9 +233,13 @@ func handleChat(w http.ResponseWriter, r *http.Request, body []byte, dumpHeaders
 					{"index": 0, "delta": map[string]string{"content": t}, "finish_reason": ""},
 				},
 			}
-			if err := enc.Encode(evt); err != nil {
+			// 标准 SSE 帧：data: <json>\n\n（此前这里只写裸 JSON 行，
+			// 与真实上游不一致，导致 E3 测的是假场景）
+			b, err := jsonLiteral(evt)
+			if err != nil {
 				return
 			}
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", b)
 			if flusher != nil {
 				flusher.Flush()
 			}
@@ -359,7 +374,7 @@ func handleAnthropic(w http.ResponseWriter, r *http.Request, body []byte) {
 
 func writeAnthropicSSE(w http.ResponseWriter, flusher http.Flusher, id, model string, tokens []string) {
 	send := func(event string, data interface{}) {
-		b, _ := json.Marshal(data)
+		b, _ := jsonLiteral(data) // json.Marshal 会转义 < >，破坏占位符
 		_, _ = fmt.Fprintf(w, "event: %s\n", event)
 		_, _ = fmt.Fprintf(w, "data: %s\n\n", b)
 		if flusher != nil {

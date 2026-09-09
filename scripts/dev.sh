@@ -101,6 +101,19 @@ test() {
   (cd "$SRC_DIR" && go test "${args[@]}")
 }
 
+# 构建三套二进制（e2e 需要 mock-llm / mock-detector）。
+# 注意：-o 千万别写 /c/Users/... 这类 POSIX 路径——Windows 版 Go 会解析成
+# C:////c////Users////...，二进制静默落到别处，测试跑的还是旧文件。一律用相对路径 + cp。
+buildall() {
+  need_sync
+  (cd "$SRC_DIR" && \
+    go build -o ./llmate-gate.exe ./cmd/llmate-gate && \
+    go build -o ./mock-llm.exe ./cmd/mock-llm && \
+    go build -o ./mock-detector.exe ./cmd/mock-detector) || return 1
+  cp "$SRC_DIR/llmate-gate.exe" "$SRC_DIR/mock-llm.exe" "$SRC_DIR/mock-detector.exe" "$BUILD_DIR/" && \
+    log "buildall ok -> $BUILD_DIR"
+}
+
 run() {
   need_sync
   (cd "$SRC_DIR" && go run ./cmd/llmate-gate "$@")
@@ -112,6 +125,7 @@ case "$cmd" in
   envcheck) envcheck "$@" ;;
   sync)     sync "$@" ;;
   build)    build "$@" ;;
+  buildall) buildall "$@" ;;
   vet)      vet "$@" ;;
   test)     test "$@" ;;
   run)      run "$@" ;;

@@ -68,7 +68,34 @@
 
 本地验证（干净 clone 自 origin/main，等同 CI）：`go mod verify` ✓ / `vet` ✓ / `go test ./...` 全绿 / e2e 18/18 / ui_smoke 11/11 / bench validate PASS。
 
+### Phase 2 · 阶段 1：跨 SSE 事件边界的占位符还原（E3 从 SKIP → PASS）
+
+对应技术方案 §5「流式还原」/ 契约 §5.3。三层根因，逐层挖出来的：
+
+1. **fixture 造假**：`mock-llm` 的 chat 流式分支只写裸 JSON 行 + `\n`，末尾才一个
+   `data: [DONE]`，根本不是标准 SSE（真实上游是 `data: {...}\n\n`）。E3 一直在测假场景。
+   → 改为标准 SSE 帧；并抽出 `jsonLiteral()`（`json.Marshal` 会把 `<>` 转成
+   `\u003c\u003e`，破坏占位符），Anthropic 分支一并换掉。
+2. **还原发生在错误的维度**：`StreamRestorer` 直接对原始字节流做匹配，而 SSE 帧结构
+   （`data: ` 前缀、`\n\n`、下一帧 JSON）会插进占位符中间 → `<<email` 与 `_1>>` 永远拼不上。
+   → 新增 `internal/replacer/sse.go`：`SSERestorer` 按帧解析，只把 data 负载里
+   `content/text/reasoning_content/...` 这些文本键的字符串交给 `StreamRestorer`；
+   后者的跨块缓冲在「内容维度」跨事件保持，所以被拆开的占位符能拼回并还原。
+   非 data 行（event:/id:/retry:/[DONE]）原样透传；`dec.UseNumber()` 保住数字字面。
+   → `proxy.streamResponse` 按上游 Content-Type 决定是否启用帧感知还原。
+3. **构建产物没更新**：`go build -o /c/Users/...` 在 Windows 版 Go 下被解析成
+   `C://c//Users//...`，二进制静默写到别处 → 本地一直在跑旧文件，修复"看起来没生效"。
+   → `scripts/dev.sh buildall`（相对路径 + cp）统一构建三套二进制。
+
+验证：新增 `sse_test.go` 6 例（跨事件拆分、非 data 行保留、数字保持、半帧、非文本键不动、Close 收尾）；
+`go vet` ✓ / `go test ./...` 全绿 / **e2e 从 18/18 → 21/21（E3 三项断言全 PASS，默认不再跳过）** / ui_smoke 11/11。
+
 ### 进行中
+
+- [ ] Phase 2 阶段 2：tool-call 参数逐值脱敏（键保留）、per-type fate 配置化、detection_cache Merkle 增量
+- [ ] Phase 2 阶段 3：VS Code 扩展 + Claude Code hooks（执行手册任务 2.1 / 2.2）
+
+
 
 - [ ] Phase 2：tool-call 递归扫描 / per-type fate / VS Code 扩展 / Claude Code hooks
 

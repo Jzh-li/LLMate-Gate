@@ -47,9 +47,13 @@
     - E7 鉴权：错 token / 无 token 都 401
     - E8 embeddings：input 数组脱敏
 
+- [x] **任务 5**：CI + 覆盖率 + cn-pii-bench 骨架
+  - `.github/workflows/ci.yml`：Ubuntu runner 上 `vet` + `go test ./...` + 构建三套二进制 + ui-smoke HTML/401 健康 + coverage artifact
+  - `bench/fixtures/cases.{jsonl,schema.json}`：10 个 v0.1 合成样本（含 8 类 PII + 1 个 negative）
+  - `bench/validate.py`：JSONL 自检（id/text/expect/start/end/value 一致性），CI 可直接 `python bench/validate.py` 挂门
+
 ### 进行中
 
-- [ ] 任务 5 剩余：GitHub Actions CI（`.github/workflows/ci.yml`）+ 覆盖率门 + `cn-pii-bench` 骨架
 - [ ] Phase 1 收尾：移除孤儿 `trie.go`（safe-delete 阻碍 WSL 路径删除，留到 CI 链路打通后处理）
 - [ ] Phase 2：tool-call 递归扫描 / per-type fate / VS Code 扩展 / Claude Code hooks
 
@@ -64,3 +68,5 @@
 | 映射表落盘 | 跳转（Original 进加密 blob） | 加密后密文可还原；`json:"-"` 会破坏 Seal/Unseal 往返与重启还原 |
 | e2e 路径 | 跳转（NTFS scratch + Windows 路径） | WSL 9P 文件锁+路径解析双坑，强制走 `C:/...` 路径直达 Windows 二进制 |
 | E3 跨 SSE 边界还原 | 步行（已知限制） | 完整修复需 buf 分事件 → 跨事件 substring 还原（任务 2.4 标记 TODO，不阻断 Phase 1 收口） |
+| 覆盖率门 | 跳转（artifact 上传而非 PR 阻断） | 首次覆盖基线尚未稳定，先收集数据；阈值门禁放到 v0.2 |
+| cn-pii-bench 模块化 | 跳转（独立 Python 校验脚本） | WSL 9P 不支持 go mod init 落锁，跳过 Go test；用 Python 直接读 JSONL，等 CI 跑通了再补 Go loader |

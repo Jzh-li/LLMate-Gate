@@ -1,0 +1,10 @@
+{"id":"zh-person-001","text":"联系 张三 13800138000","expect":[{"type":"zh_person_name","value":"张三","start":3,"end":5},{"type":"zh_phone","value":"13800138000","start":6,"end":17}]}
+{"id":"zh-idcard-001","text":"身份证 110101199003078917 已登记","expect":[{"type":"zh_id_card","value":"110101199003078917","start":4,"end":22}]}
+{"id":"zh-email-001","text":"Email: zhangsan@example.com","expect":[{"type":"email","value":"zhangsan@example.com","start":7,"end":27}]}
+{"id":"zh-org-001","text":"请联系 阿里巴巴 公司 处理","expect":[{"type":"org_name","value":"阿里巴巴","start":4,"end":8}]}
+{"id":"zh-phone-002","text":"+86 13800138000 是主号","expect":[{"type":"zh_phone","value":"13800138000","start":4,"end":15}]}
+{"id":"zh-bank-001","text":"信用卡 6222021234567890123","expect":[{"type":"zh_bank_card","value":"6222021234567890123","start":4,"end":23}]}
+{"id":"zh-address-001","text":"收货地址: 北京市海淀区中关村大街1号","expect":[{"type":"address","value":"北京市海淀区中关村大街1号","start":6,"end":19}]}
+{"id":"zh-ip-001","text":"登录 IP 192.168.1.100","expect":[{"type":"ip_addr","value":"192.168.1.100","start":6,"end":19}]}
+{"id":"zh-mix-001","text":"张三 13800138000 zhangsan@163.com","expect":[{"type":"zh_person_name","value":"张三","start":0,"end":2},{"type":"zh_phone","value":"13800138000","start":3,"end":14},{"type":"email","value":"zhangsan@163.com","start":15,"end":31}]}
+{"id":"zh-negative-001","text":"这是一段无 PII 的普通文本。","expect":[]}

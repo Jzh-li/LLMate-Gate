@@ -1,0 +1,24 @@
+{
+  "_comment": "cases.jsonl — 每行一个 case：{\"id\":\"e2e-001\",\"text\":\"...\",\"expect\":[{\"type\":\"...\",\"value\":\"...\",\"start\":i,\"end\":j}]}",
+  "_schema": {
+    "type": "object",
+    "required": ["id", "text", "expect"],
+    "properties": {
+      "id": {"type": "string"},
+      "text": {"type": "string"},
+      "expect": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["type", "value", "start", "end"],
+          "properties": {
+            "type": {"enum": ["zh_person_name", "zh_phone", "zh_id_card", "email", "zh_bank_card", "ip_addr", "org_name", "address"]},
+            "value": {"type": "string"},
+            "start": {"type": "integer"},
+            "end": {"type": "integer"}
+          }
+        }
+      }
+    }
+  }
+}

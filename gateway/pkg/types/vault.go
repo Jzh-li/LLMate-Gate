@@ -59,16 +59,27 @@ type MappingTable struct {
 
 // MappingEntry 单条占位符 ↔ 原值映射（契约 §7.1）。
 //
-// Original 为明文字段，不参与 JSON 序列化；使用完毕必须调用 Zeroize 清零。
+// Original 为明文字段：仅在内存驻留，落盘时由 Seal 经 AES-256-GCM
+// 加密为密文（不是明文），使用完毕必须调用 Zeroize 清零内存。
 type MappingEntry struct {
 	Placeholder string  `json:"placeholder"`
-	Original    []byte  `json:"-"`
+	Original    []byte  `json:"original"`
 	EntityType  string  `json:"entity_type"`
 	Score       float32 `json:"score"`
 	Fate        Fate    `json:"fate"`
 	Start       int     `json:"start_offset"`
 	End         int     `json:"end_offset"`
 	FakeValue   []byte  `json:"fake_value,omitempty"`
+}
+
+// Sentinel 返回该实体在上游侧可见的字符串：
+// simulate 模式下是仿真值，placeholder 模式下是占位符。
+// 响应还原时用它做 trie 匹配。
+func (e *MappingEntry) Sentinel() string {
+	if len(e.FakeValue) > 0 {
+		return string(e.FakeValue)
+	}
+	return e.Placeholder
 }
 
 // Zeroize 将明文字段清零（契约 §7.4 内存安全）。

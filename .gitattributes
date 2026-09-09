@@ -1,0 +1,12 @@
+# 仓库内统一使用 LF 换行：源码最终会在 WSL/Linux 与 CI 上运行，
+# CRLF 会导致 shell 脚本（scripts/*.sh、e2e/*.sh）在 Linux 下执行失败。
+* text=auto eol=lf
+
+# 二进制与产物不参与换行转换
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.exe binary
+*.onnx binary

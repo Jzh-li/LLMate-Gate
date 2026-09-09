@@ -150,3 +150,26 @@ jobs:
         run: |
           python3 -V
           python3 bench/validate.py
+
+  bench-baseline:
+    name: bench baseline (真实引擎召回)
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: gateway/go.sum
+
+      # 用真实 RegexEngine 跑语料，量化内置检测引擎的精确率/召回率（Phase 0 立项基线）。
+      # 整体召回 < 0.9 时非零退出，作为回归守门（地址等弱格式实体召回受正则启发式限制，
+      # 完整召回依赖 pii-engineer NER sidecar，见 DECISION.md）。
+      - name: 构建并运行 bench-runner
+        working-directory: gateway
+        run: |
+          CGO_ENABLED=0 go build -o ../build/bench-runner ./cmd/bench-runner
+          ../build/bench-runner ../bench/fixtures/cases.jsonl

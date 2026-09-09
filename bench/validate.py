@@ -45,6 +45,9 @@ def main() -> int:
                 continue
 
             n_pos += 1
+            # detector（pkg/types.Entity）的 start/end 为 UTF-8 字节偏移，
+            # 因此这里按字节切片比较，不能用 Python 字符串的字符索引。
+            tb = text.encode("utf-8")
             for j, e in enumerate(expect):
                 t = e.get("type", "")
                 v = e.get("value", "")
@@ -53,14 +56,16 @@ def main() -> int:
                 type_counter[t] = type_counter.get(t, 0) + 1
                 if s < 0:
                     errors.append(f"{cid}[{j}]: start 必须 ≥ 0")
-                if ed > len(text):
-                    errors.append(f"{cid}[{j}]: end {ed} > len(text) {len(text)}")
+                if ed > len(tb):
+                    errors.append(f"{cid}[{j}]: end {ed} > len(text bytes) {len(tb)}")
                 if ed <= s:
                     errors.append(f"{cid}[{j}]: end 必须 > start")
-                if 0 <= s < ed <= len(text) and text[s:ed] != v:
-                    errors.append(
-                        f"{cid}[{j}]: value={v!r} != text[{s}:{ed}]={text[s:ed]!r}"
-                    )
+                if 0 <= s < ed <= len(tb):
+                    seg = tb[s:ed].decode("utf-8", "replace")
+                    if seg != v:
+                        errors.append(
+                            f"{cid}[{j}]: value={v!r} != text[{s}:{ed}]={seg!r}"
+                        )
 
     print("=== bench/validate.py 报告 ===")
     print(f"total cases: {n_total}  positive: {n_pos}  negative: {n_neg}")

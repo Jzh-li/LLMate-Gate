@@ -23,6 +23,7 @@ import (
 	"gateway/internal/detector"
 	"gateway/internal/metrics"
 	"gateway/internal/pipeline"
+	"gateway/internal/policy"
 	"gateway/internal/proxy"
 	"gateway/internal/replacer"
 	"gateway/internal/server"
@@ -87,6 +88,14 @@ func main() {
 
 	// 替换器 + 仿真配置（Replacer 接口含 SetStrategy，支持规则热加载）。
 	sessionKey := deriveSessionKey()
+
+	// per-type fate 策略（Phase 2 阶段 2）：配置覆盖 + 历史 irreversible 列表并入。
+	pol, err := policy.New(cfg.Replacement.PerTypeFate)
+	if err != nil {
+		log.Fatalf("policy config error: %v", err)
+	}
+	pol = pol.WithIrreversible(cfg.Replacement.Irreversible)
+
 	repl := replacer.New(replacer.Config{
 		Strategy:     cfg.Replacement.Strategy,
 		Irreversible: cfg.Replacement.Irreversible,
@@ -97,6 +106,7 @@ func main() {
 			BankCard:   cfg.Replacement.SimulateZH.BankCard,
 		},
 		SessionKey: sessionKey,
+		Policy:     pol,
 	}, v)
 
 	// 检测缓存。
@@ -112,6 +122,24 @@ func main() {
 					return
 				case <-t.C:
 					dc.Sweep()
+				}
+			}
+		}()
+	}
+
+	// Merkle 增量检测缓存：绑定 conversation_id，只扫新增 turn（Phase 2 阶段 2）。
+	var merkle *cache.MerkleCache
+	if cfg.Detection.Cache.Enabled && cfg.Detection.Cache.BindConversation {
+		merkle = cache.NewMerkle(cfg.Detection.Cache.TTL)
+		go func() {
+			t := time.NewTicker(time.Minute)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					merkle.Sweep()
 				}
 			}
 		}()
@@ -158,7 +186,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("invalid upstream url: %v", err)
 	}
-	px := proxy.New(proc, up, cfg.Gateway.UpstreamAPIKey, "2023-06-01", m, cfg.Audit.LogPII)
+	px := proxy.New(proc, up, cfg.Gateway.UpstreamAPIKey, "2023-06-01", m, cfg.Audit.LogPII, merkle)
 
 	// 服务。
 	srv := server.New(server.Options{

@@ -9,10 +9,10 @@ import (
 	"sync"
 
 	gatewayerrors "gateway/internal/errors"
-	"gateway/pkg/types"
-
+	"gateway/internal/policy"
 	"gateway/internal/simulator"
 	"gateway/internal/vault"
+	"gateway/pkg/types"
 )
 
 // Replacer 脱敏/还原抽象（契约 §5.1）。
@@ -23,6 +23,9 @@ type Replacer interface {
 	Strategy() string
 	// SetStrategy 热加载替换策略（线程安全）。
 	SetStrategy(string) error
+	// NewSession 构造一次请求内的替换会话：跨多个字段 / 消息共享占位符计数与
+	// (type,value) 复用，保证全局占位符唯一、跨段指代不崩（契约 §5.2 规则 1-3）。
+	NewSession() *Session
 }
 
 // ReplaceRequest 脱敏入参（契约 §5.1）。
@@ -57,6 +60,8 @@ type Config struct {
 	Irreversible []string
 	Simulate     simulator.SimulateZHConfig
 	SessionKey   []byte
+	// Policy 逐类型命运策略（per-type fate）；nil 时使用内置默认。
+	Policy *policy.Policy
 }
 
 // impl 默认实现。
@@ -95,88 +100,35 @@ func (r *impl) SetStrategy(s string) error {
 	return nil
 }
 
-// Replace 对文本做脱敏（契约 §5.1/§5.2）。
+// Replace 对单段文本做脱敏（契约 §5.1/§5.2）。
 //
-// 协议保证：
-//  1. 同 (type, value) → 同占位符（跨句指代不崩）
-//  2. 不同类型即使值相同 → 不同占位符
-//  3. index 按 type 独立计数
-//  4. 记录占位符在**脱敏文本**中的 [Start, End)
+// 单段调用等价于一次独立会话；多字段 / 多消息的请求应改用 NewSession() 以共享占位符计数，
+// 避免同一类型不同值跨段产生重复占位符导致还原错乱。
 func (r *impl) Replace(ctx context.Context, req *ReplaceRequest) (*ReplaceResult, error) {
 	if req == nil {
 		return nil, gatewayerrors.New(gatewayerrors.CodeInvalidRequest, "nil replace request")
 	}
-	text := req.Text
-	if text == "" {
-		return &ReplaceResult{Text: "", Entries: nil}, nil
+	sess := r.NewSession()
+	if req.Strategy != "" {
+		_ = sess.SetStrategy(req.Strategy)
 	}
-	strategy := req.Strategy
-	if strategy == "" {
-		strategy = r.cfg.Strategy
+	clean, entries, err := sess.Replace(req.Text, req.Entities)
+	if err != nil {
+		return nil, err
 	}
+	return &ReplaceResult{Text: clean, Entries: entries}, nil
+}
 
-	// 1. 排序 + 去重重叠（防御性：检测引擎已保证，但替换阶段再兜一次）
-	ents := sanitizeEntities(text, req.Entities)
-	if len(ents) == 0 {
-		return &ReplaceResult{Text: text, Entries: nil}, nil
+// NewSession 构造一次请求内的替换会话（共享占位符计数与 (type,value) 复用）。
+func (r *impl) NewSession() *Session {
+	return &Session{
+		cfg:          r.cfg,
+		sim:          r.sim,
+		vault:        r.vault,
+		strategy:     r.Strategy(),
+		typeCounters: map[string]int{},
+		valueIndex:   map[string]int{},
 	}
-
-	typeCounters := map[string]int{}
-	valueIndex := map[string]int{} // (type \x00 value) → 在 entries 中的下标
-	var entries []types.MappingEntry
-
-	var sb strings.Builder
-	prev := 0
-	for _, e := range ents {
-		if e.Start < prev {
-			continue // 与已处理区间重叠，跳过
-		}
-		sb.WriteString(text[prev:e.Start])
-
-		fate := r.fateFor(e.Type, strategy)
-		key := e.Type + "\x00" + e.Value
-		if idx, seen := valueIndex[key]; seen {
-			// 同 (type, value) → 复用同一上游可见串，保证 LLM 跨句指代不崩
-			sb.WriteString(entries[idx].Sentinel())
-			prev = e.End
-			continue
-		}
-
-		typeCounters[e.Type]++
-		placeholder := fmt.Sprintf("<<%s_%d>>", e.Type, typeCounters[e.Type])
-		entry := types.MappingEntry{
-			Placeholder: placeholder,
-			Original:    []byte(e.Value),
-			EntityType:  e.Type,
-			Score:       float32(e.Score),
-			Fate:        fate,
-		}
-		var emitted string
-		switch fate {
-		case types.FateRedact:
-			emitted = RedactedText
-		case types.FateMask:
-			emitted = maskValue(e.Value)
-		case types.FateReversible:
-			emitted = placeholder
-			if strategy == "simulate" {
-				if fake, err := r.sim.Fake(e.Type, []byte(e.Value), nil); err == nil && len(fake) > 0 {
-					entry.FakeValue = fake
-					emitted = string(fake)
-				}
-			}
-		}
-		start := sb.Len()
-		sb.WriteString(emitted)
-		entry.Start = start
-		entry.End = sb.Len()
-		valueIndex[key] = len(entries)
-		entries = append(entries, entry)
-		prev = e.End
-	}
-	sb.WriteString(text[prev:])
-
-	return &ReplaceResult{Text: sb.String(), Entries: entries}, nil
 }
 
 // Restore 在响应文本中还原（契约 §5.1）。
@@ -209,9 +161,108 @@ func (r *impl) Restore(ctx context.Context, req *RestoreRequest) (string, error)
 	return string(out) + string(rest), nil
 }
 
+// Session 一次请求内的替换会话：跨多个字段 / 消息共享占位符计数与 (type,value) 复用，
+// 保证全局占位符唯一、跨段指代不崩（契约 §5.2 规则 1-3）。同时修复「不同段同类型不同值
+// 各自从 _1 编号导致占位符碰撞、还原错乱」的隐患。
+type Session struct {
+	mu           sync.Mutex
+	cfg          Config
+	sim          *simulator.Generator
+	vault        vault.Vault
+	strategy     string
+	typeCounters map[string]int
+	valueIndex   map[string]int
+	entries      []types.MappingEntry
+}
+
+// SetStrategy 热加载替换策略（线程安全）。
+func (s *Session) SetStrategy(str string) error {
+	switch str {
+	case "", "placeholder", "simulate":
+	default:
+		return fmt.Errorf("invalid strategy %q", str)
+	}
+	s.mu.Lock()
+	s.strategy = str
+	s.mu.Unlock()
+	return nil
+}
+
+// Replace 对单段文本做脱敏，并累积到本次会话的占位符序列（契约 §5.1/§5.2）。
+func (s *Session) Replace(text string, ents []types.Entity) (string, []types.MappingEntry, error) {
+	if text == "" {
+		return "", nil, nil
+	}
+	strategy := s.strategy
+	ents = sanitizeEntities(text, ents)
+	if len(ents) == 0 {
+		return text, nil, nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var sb strings.Builder
+	prev := 0
+	for _, e := range ents {
+		if e.Start < prev {
+			continue // 与已处理区间重叠，跳过
+		}
+		sb.WriteString(text[prev:e.Start])
+
+		fate := s.fateFor(e.Type, strategy)
+		key := e.Type + "\x00" + e.Value
+		if idx, seen := s.valueIndex[key]; seen {
+			// 同 (type, value) → 复用同一上游可见串，保证 LLM 跨句指代不崩
+			sb.WriteString(s.entries[idx].Sentinel())
+			prev = e.End
+			continue
+		}
+
+		s.typeCounters[e.Type]++
+		placeholder := fmt.Sprintf("<<%s_%d>>", e.Type, s.typeCounters[e.Type])
+		entry := types.MappingEntry{
+			Placeholder: placeholder,
+			Original:    []byte(e.Value),
+			EntityType:  e.Type,
+			Score:       float32(e.Score),
+			Fate:        fate,
+		}
+		var emitted string
+		switch fate {
+		case types.FateRedact:
+			emitted = RedactedText
+		case types.FateMask:
+			emitted = maskValue(e.Value)
+		case types.FateReversible:
+			emitted = placeholder
+			if strategy == "simulate" {
+				if fake, err := s.sim.Fake(e.Type, []byte(e.Value), nil); err == nil && len(fake) > 0 {
+					entry.FakeValue = fake
+					emitted = string(fake)
+				}
+			}
+		}
+		start := sb.Len()
+		sb.WriteString(emitted)
+		entry.Start = start
+		entry.End = sb.Len()
+		s.valueIndex[key] = len(s.entries)
+		s.entries = append(s.entries, entry)
+		prev = e.End
+	}
+	sb.WriteString(text[prev:])
+
+	return sb.String(), s.entries, nil
+}
+
 // fateFor 决定实体命运（技术方案 §5 per-type fate + 契约 §6.1）。
-func (r *impl) fateFor(entityType, strategy string) types.Fate {
-	for _, t := range r.cfg.Irreversible {
+func (s *Session) fateFor(entityType, strategy string) types.Fate {
+	if s.cfg.Policy != nil {
+		return s.cfg.Policy.FateFor(entityType, strategy)
+	}
+	// 内置默认：历史 irreversible 列表 → redact；其余回落 Type 默认。
+	for _, t := range s.cfg.Irreversible {
 		if t == entityType {
 			return types.FateRedact
 		}

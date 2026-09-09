@@ -2,9 +2,9 @@
 
 > 探路者 Loop 的进度追踪（执行手册 §"进度追踪"）。每完成一阶段更新一次。
 
-## 当前阶段：Phase 1 · 任务 1.1-1.5（代理核心 + 内嵌调试面板）
+## 当前阶段：Phase 2 · 阶段 2（tool-call 脱敏 + per-type fate + Merkle 增量）已完成
 
-## 当前任务：Phase 1 全部完成（任务 1.1-1.6 + 调试面板 + 任务 5 E2E/CI/bench + trie 清理），下一步 Phase 2
+## 当前任务：Phase 2 阶段 1+2 完成（跨 SSE 还原 + tool-call 逐值脱敏 + per-type fate 配置化 + detection_cache Merkle 增量），下一步 Phase 2 阶段 3（VS Code 扩展 + Claude Code hooks）
 
 ## 状态：执行中
 
@@ -90,9 +90,41 @@
 验证：新增 `sse_test.go` 6 例（跨事件拆分、非 data 行保留、数字保持、半帧、非文本键不动、Close 收尾）；
 `go vet` ✓ / `go test ./...` 全绿 / **e2e 从 18/18 → 21/21（E3 三项断言全 PASS，默认不再跳过）** / ui_smoke 11/11。
 
+### Phase 2 · 阶段 2：tool-call 参数逐值脱敏 + per-type fate 配置化 + detection_cache Merkle 增量
+
+对应技术方案 §5 per-type fate / 契约 §6.1 / 契约 §8 / §10.3。三项子任务：
+
+1. **tool-call 参数逐值脱敏（键保留）**：`proxy.transform` 对 `arguments` 键特殊处理，经
+   `anonymizeJSONString` 把 JSON 字符串/对象/数组统一按 `transform(parsed, true, anon)`
+   递归扫描——只把字符串值送检测，JSON 键永不脱敏。覆盖 OpenAI `tool_calls[].function.arguments`
+   三种形态（字符串 / 对象 / 数组）。
+2. **per-type fate 策略引擎**：新增 `internal/policy`——`New(per_type_fate)` 从 YAML 构造可校验
+   策略，`FateFor` 决议优先级「逐类型覆盖 > 内置不可逆类型 > 银行卡占位符模式例外 (mask) >
+   默认可逆」；`WithIrreversible` 兼容历史 `replacement.irreversible` 字段。
+   `config.ReplacementConfig.PerTypeFate` + `Validate()` 校验（非法 fate → 启动失败）；
+   `replacer.Session.fateFor` 优先走 `Policy`，否则回落内置默认。
+3. **detection_cache Merkle 增量**：新增 `internal/cache/merkle.go`——会话级有序段数组，每段
+   SHA-256 构成前缀链；下一轮请求只检测「新增尾部段」，命中前缀的段零检测。历史被改写
+   （分叉/段数变少）在前缀首个分叉处截断重检。`proxy.anonymizeBody` 在 `merkle != nil` 且
+   `convID != ""` 时提取 `messages[].content` 段，复用缓存实体走 `sess.Replace`，否则走
+   `proc.DetectText`。`metrics.DetectIncremental` 记录 detected/reused。
+
+修复的两处隐患：
+- **占位符跨段重复编号**：原 `Replacer.Replace` 是「单段」语义，多段各自从 `_1` 编号 → 同类型
+  不同值跨段碰撞、还原错乱。改为 `replacer.NewSession()` 共享 `typeCounters` + `valueIndex`，
+  全局占位符唯一。
+- **Merkle 初版实现缠绕**：第一版用 parentOf/rebuildChain 等父指针 hack，逻辑复杂易错，整体
+  重写为干净的「per-conversation 有序段数组 + SHA-256 前缀匹配」。
+
+验证：`policy_test.go` 4 例 / `merkle_test.go` 前缀命中·分叉重检·截断·Invalidate /
+`proxy_test.go` 新增 `TestProxy_ToolCall_ArgumentsString`（JSON 字符串、键保留 + api_key 不可逆
+redact + 可逆占位符）、`TestProxy_ToolCall_ArgumentsObject`（对象形态）、
+`TestProxy_ConversationIncremental`（多轮只扫新增段、累计检测 3 次、占位符不碰撞）。
+`go vet` ✓ / `go test ./...` 全绿（含 proxy/cache/policy/replacer）/ **e2e 维持 21/21**。
+
 ### 进行中
 
-- [ ] Phase 2 阶段 2：tool-call 参数逐值脱敏（键保留）、per-type fate 配置化、detection_cache Merkle 增量
+- [x] Phase 2 阶段 2：tool-call 参数逐值脱敏（键保留）、per-type fate 配置化、detection_cache Merkle 增量
 - [ ] Phase 2 阶段 3：VS Code 扩展 + Claude Code hooks（执行手册任务 2.1 / 2.2）
 
 

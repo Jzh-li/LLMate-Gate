@@ -133,6 +133,52 @@ func (p *Processor) Anonymize(ctx context.Context, reqID, convID, text string) (
 	return rr.Text, rr.Entries, detMs, nil
 }
 
+// DetectText 仅做检测（带 per-text LRU 缓存 + 指标 + fail-closed），返回实体。
+//
+// 用于 Merkle 增量路径：proxy 在会话内对每段文本调用，命中 Merkle 前缀的旧段根本不会
+// 进入此函数（零检测），只有新增尾部段会真正送检测器（契约 §10.3）。
+func (p *Processor) DetectText(ctx context.Context, convID, text string) ([]types.Entity, error) {
+	if text == "" {
+		return nil, nil
+	}
+	var resp *types.DetectResponse
+	if p.useCache && p.dc != nil && convID != "" {
+		if r, ok := p.dc.Get(convID, cache.HashText(text)); ok {
+			resp = r
+			if p.m != nil {
+				p.m.CacheHits.WithLabelValues(convID).Inc()
+			}
+			p.publish(EvDetectionDone, DetectionPayload{RequestID: "", Cached: true, Entities: r.Entities})
+			return r.Entities, nil
+		}
+	}
+	start := time.Now()
+	r, derr := p.det.Detect(ctx, &types.DetectRequest{Text: text, ConversationID: convID})
+	if p.m != nil {
+		p.m.DetectLatency.WithLabelValues(p.det.Name()).Observe(time.Since(start).Seconds())
+	}
+	if derr != nil {
+		if !p.failClosed {
+			return nil, nil
+		}
+		return nil, classifyDetectErr(derr)
+	}
+	resp = r
+	if p.useCache && p.dc != nil && convID != "" {
+		_ = p.dc.Put(convID, cache.HashText(text), resp)
+		if p.m != nil {
+			p.m.CacheMisses.WithLabelValues(convID).Inc()
+		}
+	}
+	p.publish(EvDetectionDone, DetectionPayload{RequestID: "", Cached: false, Entities: resp.Entities})
+	return resp.Entities, nil
+}
+
+// NewSession 构造一次请求内的替换会话（共享占位符计数，保证全局唯一）。
+func (p *Processor) NewSession() *replacer.Session {
+	return p.repl.NewSession()
+}
+
 // Store 把一次请求的全部映射条目写入 vault（按 RequestID 还原）。
 func (p *Processor) Store(reqID, convID string, entries []types.MappingEntry) error {
 	if len(entries) == 0 {

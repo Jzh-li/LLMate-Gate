@@ -17,6 +17,7 @@ import (
 	"time"
 
 	gatewayerrors "gateway/internal/errors"
+	"gateway/internal/cache"
 	"gateway/internal/metrics"
 	"gateway/internal/pipeline"
 	"gateway/internal/replacer"
@@ -32,10 +33,11 @@ type Proxy struct {
 	client         *http.Client
 	m              *metrics.Collectors
 	logPII         bool
+	merkle         *cache.MerkleCache // 会话级增量检测缓存（nil 关闭）
 }
 
 // New 构造代理。
-func New(proc *pipeline.Processor, upstream *url.URL, upstreamAPIKey, upstreamVer string, m *metrics.Collectors, logPII bool) *Proxy {
+func New(proc *pipeline.Processor, upstream *url.URL, upstreamAPIKey, upstreamVer string, m *metrics.Collectors, logPII bool, merkle *cache.MerkleCache) *Proxy {
 	return &Proxy{
 		proc:           proc,
 		upstream:       upstream,
@@ -44,6 +46,7 @@ func New(proc *pipeline.Processor, upstream *url.URL, upstreamAPIKey, upstreamVe
 		client:         &http.Client{Timeout: 30 * time.Second},
 		m:              m,
 		logPII:         logPII,
+		merkle:         merkle,
 	}
 }
 
@@ -124,15 +127,61 @@ func (p *Proxy) anonymizeBody(ctx context.Context, body []byte, reqID, convID st
 		}
 		return []byte(clean), ents, nil
 	}
+
+	// 一次请求共享一个替换会话：跨字段 / 跨消息的占位符计数全局唯一，
+	// 避免同类型不同值跨段碰撞导致还原错乱（契约 §5.2）。
+	sess := p.proc.NewSession()
+
+	// Merkle 增量：多轮对话的 message content 段做前缀复用，只扫新增 turn。
+	var segEntities map[string][]types.Entity
+	if p.merkle != nil && convID != "" {
+		if segs, ok := extractMessageContents(doc); ok {
+			res, merr := p.merkle.GetOrDetect(convID, segs, func(seg string) ([]types.Entity, error) {
+				return p.proc.DetectText(ctx, convID, seg)
+			})
+			if merr != nil {
+				// 增量路径检测异常 → 回落到逐段检测路径（由 fail-closed 统一阻断）。
+				segEntities = nil
+			} else {
+				segEntities = make(map[string][]types.Entity, len(res.Segments))
+				for _, s := range res.Segments {
+					segEntities[s.Text] = s.Entities
+				}
+				if p.m != nil {
+					p.m.DetectIncremental.WithLabelValues("detected").Add(float64(res.Scanned))
+					p.m.DetectIncremental.WithLabelValues("reused").Add(float64(len(res.Segments) - res.Scanned))
+				}
+			}
+		}
+	}
+
 	var collected []types.MappingEntry
 	anon := func(text string) (string, error) {
-		clean, ents, _, e := p.proc.Anonymize(ctx, reqID, convID, text)
-		if e != nil {
-			return "", e
+		// 优先复用 Merkle 缓存命中的段实体（零检测）。
+		if segEntities != nil {
+			if ents, hit := segEntities[text]; hit {
+				clean, ne, rerr := sess.Replace(text, ents)
+				if rerr != nil {
+					return "", rerr
+				}
+				collected = append(collected, ne...)
+				p.recordReplace(ne)
+				return clean, nil
+			}
 		}
-		collected = append(collected, ents...)
+		ents, derr := p.proc.DetectText(ctx, convID, text)
+		if derr != nil {
+			return "", derr
+		}
+		clean, ne, rerr := sess.Replace(text, ents)
+		if rerr != nil {
+			return "", rerr
+		}
+		collected = append(collected, ne...)
+		p.recordReplace(ne)
 		return clean, nil
 	}
+
 	transformed, terr := transform(doc, false, anon)
 	if terr != nil {
 		return nil, nil, terr
@@ -146,6 +195,43 @@ func (p *Proxy) anonymizeBody(ctx context.Context, body []byte, reqID, convID st
 		return nil, nil, gatewayerrors.Wrap(gatewayerrors.CodeReplaceFailed, "re-marshal request", err)
 	}
 	return bytes.TrimRight(buf.Bytes(), "\n"), collected, nil
+}
+
+// recordReplace 记录脱敏实体数（按命运），供 /metrics。
+func (p *Proxy) recordReplace(entries []types.MappingEntry) {
+	if p.m == nil {
+		return
+	}
+	for _, e := range entries {
+		p.m.ReplaceCount.WithLabelValues(e.Fate.String()).Inc()
+	}
+}
+
+// extractMessageContents 从 OpenAI/Anthropic 风格请求体提取有序的 message content 段
+// （多轮对话脱敏的主要增长点），用于 Merkle 增量前缀匹配。
+func extractMessageContents(doc interface{}) ([]string, bool) {
+	m, ok := doc.(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+	msgs, ok := m["messages"].([]interface{})
+	if !ok || len(msgs) == 0 {
+		return nil, false
+	}
+	var segs []string
+	for _, msg := range msgs {
+		mm, ok := msg.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if c, ok := mm["content"].(string); ok {
+			segs = append(segs, c)
+		}
+	}
+	if len(segs) == 0 {
+		return nil, false
+	}
+	return segs, true
 }
 
 // transform 递归遍历 JSON，仅对 PII 字段内的字符串脱敏。错误必须上抛（fail-closed 关键）。
@@ -191,17 +277,23 @@ func transform(v interface{}, inPII bool, anon func(string) (string, error)) (in
 	}
 }
 
-// anonymizeJSONString 把 JSON 字符串解析后整体脱敏（tool 参数场景）。
+// anonymizeJSONString 把 tool_calls[].function.arguments 解析后逐值脱敏（键保留）。
+//
+// arguments 可能是：JSON 字符串（OpenAI 常见）、对象或数组（部分 SDK 已展开）。
+// 统一按 inPII=true 递归扫描：只把字符串值送检测，JSON 键永不脱敏。
 func anonymizeJSONString(v interface{}, anon func(string) (string, error)) (interface{}, error) {
-	s, ok := v.(string)
-	if !ok {
+	switch x := v.(type) {
+	case string:
+		var parsed interface{}
+		if err := json.Unmarshal([]byte(x), &parsed); err != nil {
+			return v, nil // 非 JSON：保持原样
+		}
+		return transform(parsed, true, anon)
+	case map[string]interface{}, []interface{}:
+		return transform(x, true, anon)
+	default:
 		return v, nil
 	}
-	var parsed interface{}
-	if err := json.Unmarshal([]byte(s), &parsed); err != nil {
-		return v, nil // 非 JSON：保持原样
-	}
-	return transform(parsed, true, anon)
 }
 
 // forward 转发上游并还原响应。

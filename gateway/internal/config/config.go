@@ -71,6 +71,8 @@ type ReplacementConfig struct {
 	Strategy    string            `yaml:"strategy"`
 	SimulateZH  SimulateZHConfig  `yaml:"simulate_zh"`
 	Irreversible []string         `yaml:"irreversible"`
+	// PerTypeFate 逐类型命运覆盖：entity_type -> reversible|mask|redact（Phase 2 阶段 2）。
+	PerTypeFate map[string]string `yaml:"per_type_fate"`
 }
 
 // SimulateZHConfig 中文仿真替换开关（v1.1）。
@@ -241,6 +243,13 @@ func (c *Config) Validate() error {
 	for k, v := range c.Detection.Thresholds {
 		if v < 0 || v > 1 {
 			return gatewayerrors.Errorf(gatewayerrors.CodeInvalidConfig, "threshold %s out of range [0,1]: %v", k, v)
+		}
+	}
+	for t, f := range c.Replacement.PerTypeFate {
+		switch f {
+		case "reversible", "mask", "redact":
+		default:
+			return gatewayerrors.Errorf(gatewayerrors.CodeInvalidConfig, "replacement.per_type_fate[%s] invalid fate %q (want reversible|mask|redact)", t, f)
 		}
 	}
 	if c.Detection.Cache.MaxEntries <= 0 {

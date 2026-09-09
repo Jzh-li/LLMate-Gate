@@ -14,6 +14,8 @@ type Collectors struct {
 	StreamOrphans       *prometheus.CounterVec
 	CacheHits           *prometheus.CounterVec
 	CacheMisses         *prometheus.CounterVec
+	// DetectIncremental Merkle 增量缓存：本请求实际「送检测器」vs「复用缓存」的段数。
+	DetectIncremental   *prometheus.CounterVec
 	VaultSize           prometheus.Gauge
 	ActiveConns         prometheus.Gauge
 }
@@ -58,6 +60,10 @@ func New(reg prometheus.Registerer) *Collectors {
 			Name: "llmate_detect_cache_misses_total",
 			Help: "检测缓存未命中数",
 		}, []string{"conversation"}),
+		DetectIncremental: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "llmate_detect_incremental_segments_total",
+			Help: "Merkle 增量检测：本请求实际送检测器的段数（detected）vs 复用缓存的段数（reused）",
+		}, []string{"action"}),
 		VaultSize: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "llmate_vault_size",
 			Help: "当前存活映射表数量",
@@ -70,7 +76,7 @@ func New(reg prometheus.Registerer) *Collectors {
 	reg.MustRegister(
 		c.RequestsTotal, c.DetectLatency, c.ReplaceCount, c.RestoredTotal,
 		c.BlockedTotal, c.UpstreamErrors, c.StreamOrphans,
-		c.CacheHits, c.CacheMisses, c.VaultSize, c.ActiveConns,
+		c.CacheHits, c.CacheMisses, c.DetectIncremental, c.VaultSize, c.ActiveConns,
 	)
 	return c
 }

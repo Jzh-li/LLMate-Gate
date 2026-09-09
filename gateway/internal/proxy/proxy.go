@@ -73,13 +73,21 @@ func (p *Proxy) Handle(w http.ResponseWriter, r *http.Request, endpoint string, 
 		rawRequest = redactLog(rawRequest)
 	}
 
+	// 早发布：request.received（含原始请求 + method/stream/started_at）；
+	// Hub.Store 按 RequestID 合并，后续事件会填充其它字段。
+	p.publish(pipeline.EvRequestReceived, &pipeline.TrafficEvent{
+		RequestID: reqID, Endpoint: endpoint, Method: r.Method, Stream: stream,
+		RawRequest: rawRequest, Strategy: p.strategy(),
+		Outcome: "pending", StartedAt: start,
+	})
+
 	newBody, entries, aerr := p.anonymizeBody(r.Context(), body, reqID, convID)
 	if aerr != nil {
 		if p.m != nil {
 			p.m.BlockedTotal.WithLabelValues(errorCode(aerr)).Inc()
 			p.m.RequestsTotal.WithLabelValues(endpoint, "blocked").Inc()
 		}
-		p.publish(pipeline.EvRequestReceived, pipeline.TrafficEvent{
+		p.publish(pipeline.EvRequestReceived, &pipeline.TrafficEvent{
 			RequestID: reqID, Endpoint: endpoint, RawRequest: rawRequest,
 			Strategy: p.strategy(), Outcome: "blocked", Error: aerr.Error(), Timestamp: time.Now(),
 		})
@@ -87,13 +95,20 @@ func (p *Proxy) Handle(w http.ResponseWriter, r *http.Request, endpoint string, 
 		return
 	}
 
+	// 立即发布 detected + mapping + replaced（脱敏后立即可见，不等上游响应）。
+	// Hub.Store 按 RequestID 合并，后续 restore.done 会继续合并。
+	p.publish(pipeline.EvReplaced, &pipeline.TrafficEvent{
+		RequestID: reqID, Endpoint: endpoint,
+		Detected: entitiesFromEntries(entries),
+		Mapping:  mappingToWire(entries),
+		Replaced: string(newBody),
+		Strategy: p.strategy(),
+	})
+
 	if err := p.proc.Store(reqID, convID, entries); err != nil {
 		writeError(w, err)
 		return
 	}
-
-	// 审计：detected 摘要
-	_ = entries // entries 已存入 vault，审计从 entries 派生
 
 	p.forward(w, r, endpoint, stream, reqID, convID, newBody, rawRequest, entries, start)
 }
@@ -249,13 +264,20 @@ func (p *Proxy) fullResponse(w http.ResponseWriter, resp *http.Response, endpoin
 		}
 		p.m.RestoredTotal.WithLabelValues(endpoint).Inc()
 	}
-	p.publish(pipeline.EvUpstreamResponse, pipeline.TrafficEvent{RequestID: reqID, Endpoint: endpoint, UpstreamResp: redactLogIf(string(respBody), p.logPII)})
-	p.publish(pipeline.EvRestoreDone, pipeline.TrafficEvent{
+	now := time.Now()
+	p.publish(pipeline.EvUpstreamResponse, &pipeline.TrafficEvent{
+		RequestID: reqID, Endpoint: endpoint, UpstreamResp: redactLogIf(string(respBody), p.logPII),
+	})
+	p.publish(pipeline.EvRestoreDone, &pipeline.TrafficEvent{
 		RequestID: reqID, Endpoint: endpoint, RawRequest: rawRequest,
 		Replaced: redactLogIf(string(mustMarshalReplaced(entries)), p.logPII),
-		Restored: restored, Strategy: p.strategy(), Outcome: outcomeOf(resp.StatusCode), Timestamp: time.Now(),
+		Restored: restored, Strategy: p.strategy(), Outcome: outcomeOf(resp.StatusCode),
+		Detected: entitiesFromEntries(entries),
+		Mapping:  mappingToWire(entries),
+		StartedAt: start, FinishedAt: now,
+		DurationMs: now.Sub(start).Milliseconds(),
+		Timestamp: now,
 	})
-	_ = start
 }
 
 // streamResponse SSE 流式：逐块还原并 flush。
@@ -307,10 +329,16 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, resp *http.Response, endpo
 		}
 		p.m.RestoredTotal.WithLabelValues(endpoint).Inc()
 	}
-	p.publish(pipeline.EvUpstreamResponse, pipeline.TrafficEvent{RequestID: reqID, Endpoint: endpoint, UpstreamResp: redactLogIf(upstreamSb.String(), p.logPII)})
-	p.publish(pipeline.EvRestoreDone, pipeline.TrafficEvent{
+	now := time.Now()
+	p.publish(pipeline.EvUpstreamResponse, &pipeline.TrafficEvent{RequestID: reqID, Endpoint: endpoint, UpstreamResp: redactLogIf(upstreamSb.String(), p.logPII)})
+	p.publish(pipeline.EvRestoreDone, &pipeline.TrafficEvent{
 		RequestID: reqID, Endpoint: endpoint, RawRequest: rawRequest,
-		Restored: "[stream]", Strategy: p.strategy(), Outcome: outcomeOf(resp.StatusCode), Timestamp: time.Now(),
+		Restored: "[stream]", Strategy: p.strategy(), Outcome: outcomeOf(resp.StatusCode),
+		Detected: entitiesFromEntries(entries),
+		Mapping:  mappingToWire(entries),
+		StartedAt: start, FinishedAt: now,
+		DurationMs: now.Sub(start).Milliseconds(),
+		Timestamp: now,
 	})
 }
 
@@ -443,6 +471,40 @@ func redactLogIf(s string, logPII bool) string {
 func mustMarshalReplaced(entries []types.MappingEntry) []byte {
 	b, _ := json.Marshal(entries)
 	return b
+}
+
+// entitiesFromEntries 从映射条目还原 Entity 列表（用于调试面板 ② 检测到的 PII 段）。
+func entitiesFromEntries(entries []types.MappingEntry) []types.Entity {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]types.Entity, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, types.Entity{
+			Type:  e.EntityType,
+			Value: string(e.Original),
+			Start: e.Start,
+			End:   e.End,
+			Score: float64(e.Score),
+		})
+	}
+	return out
+}
+
+// mappingToWire 把 vault 的 MappingEntry 转成面板 JSON 形态（不含 Original 字节细节）。
+func mappingToWire(entries []types.MappingEntry) []pipeline.MappingEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]pipeline.MappingEntry, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, pipeline.MappingEntry{
+			Placeholder: e.Sentinel(),
+			Type:        e.EntityType,
+			Value:       string(e.Original),
+		})
+	}
+	return out
 }
 
 func randHex(n int) string {

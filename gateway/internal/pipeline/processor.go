@@ -24,6 +24,12 @@ type EventPublisher interface {
 	Publish(eventType string, data interface{})
 }
 
+// NopPublisher 默认空实现：debug 关闭时由 main 注入，避免每处判 nil。
+type NopPublisher struct{}
+
+// Publish 空实现。
+func (NopPublisher) Publish(string, interface{}) {}
+
 // Processor 请求处理编排器。
 type Processor struct {
 	det       detector.Client

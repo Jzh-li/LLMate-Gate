@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	gatewayerrors "gateway/internal/errors"
 	"gateway/pkg/types"
@@ -20,6 +21,8 @@ type Replacer interface {
 	Restore(ctx context.Context, req *RestoreRequest) (string, error)
 	// Strategy 当前替换策略（placeholder | simulate）。
 	Strategy() string
+	// SetStrategy 热加载替换策略（线程安全）。
+	SetStrategy(string) error
 }
 
 // ReplaceRequest 脱敏入参（契约 §5.1）。
@@ -58,6 +61,7 @@ type Config struct {
 
 // impl 默认实现。
 type impl struct {
+	mu   sync.Mutex // 保护 cfg.Strategy 热加载
 	cfg  Config
 	sim  *simulator.Generator
 	vault vault.Vault
@@ -76,6 +80,19 @@ func (r *impl) Strategy() string {
 		return "placeholder"
 	}
 	return r.cfg.Strategy
+}
+
+// SetStrategy 热加载替换策略（线程安全）。仅允许 placeholder / simulate / 空（=placeholder）。
+func (r *impl) SetStrategy(s string) error {
+	switch s {
+	case "", "placeholder", "simulate":
+	default:
+		return fmt.Errorf("invalid strategy %q", s)
+	}
+	r.mu.Lock()
+	r.cfg.Strategy = s
+	r.mu.Unlock()
+	return nil
 }
 
 // Replace 对文本做脱敏（契约 §5.1/§5.2）。

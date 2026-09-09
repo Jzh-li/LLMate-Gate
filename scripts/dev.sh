@@ -71,8 +71,19 @@ envcheck() {
 sync() {
   log "sync $REPO_ROOT/gateway -> $SRC_DIR"
   mkdir -p "$BUILD_DIR"
+  # 保留 SRC_DIR 的 go.sum（9P UNC 不支持 go mod tidy，源码库不带 go.sum）。
+  # 否则每次 sync 都会让 build 因 go.sum 缺失失败。
+  local GO_SUM_BACKUP=""
+  if [ -f "$SRC_DIR/go.sum" ]; then
+    GO_SUM_BACKUP=$(mktemp)
+    cp "$SRC_DIR/go.sum" "$GO_SUM_BACKUP"
+  fi
   rm -rf "$SRC_DIR"
   cp -r "$REPO_ROOT/gateway" "$SRC_DIR"
+  if [ -n "$GO_SUM_BACKUP" ]; then
+    cp "$GO_SUM_BACKUP" "$SRC_DIR/go.sum"
+    rm -f "$GO_SUM_BACKUP"
+  fi
   log "sync done"
 }
 
@@ -80,7 +91,10 @@ need_sync() { [ -d "$SRC_DIR" ] || sync; }
 
 build() {
   need_sync
-  (cd "$SRC_DIR" && go build -o "$BUILD_DIR/llmate-gate.exe" ./cmd/llmate-gate) \
+  # 注意：Go 在 WSL 下使用 -o /mnt/c/... 路径会失败（NTFS 写权限问题），
+  # 改用当前目录下输出，再用 cp 移动到 BUILD_DIR（Windows 路径）。
+  (cd "$SRC_DIR" && go build -o ./llmate-gate.exe ./cmd/llmate-gate) \
+    && cp "$SRC_DIR/llmate-gate.exe" "$BUILD_DIR/llmate-gate.exe" \
     && log "build ok -> $BUILD_DIR/llmate-gate.exe"
 }
 

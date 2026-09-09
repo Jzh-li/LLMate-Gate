@@ -20,6 +20,10 @@ target/
 # 敏感 fixture（仅本地使用）
 **/testdata/private/
 
+# WorkBuddy 本地数据 + 9P 构建产物（scratch 内 go.sum 由 dev.sh sync 维护）
+.workbuddy/
+gateway/go.sum
+
 # 编辑器
 .vscode/
 .idea/

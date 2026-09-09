@@ -4,7 +4,7 @@
 
 ## 当前阶段：Phase 1 · 任务 1.1-1.5（代理核心 + 内嵌调试面板）
 
-## 当前任务：1.6 服务层已完成；下一步 1.5 内嵌调试面板
+## 当前任务：1.5 已完成；下一步 任务 5（E2E + CI + 覆盖率门）
 
 ## 状态：执行中
 
@@ -27,11 +27,16 @@
   - `internal/metrics`：Prometheus 收集器（请求/检测延迟/替换/还原/阻断/上游错误/流式 orphan/缓存命中/映射表大小/活跃流）
   - `cmd/llmate-gate`：入口（配置加载→会话密钥派生→vault/detector/circuit/guarded client/replacer/cache/audit/metrics/pipeline/proxy/server 装配 + 信号优雅退出）
   - 集成测试：`TestProxy_ChatCompletions_Restore`（非流式还原）、`TestProxy_ChatCompletions_StreamRestore`（SSE 流式 + 客户端 content 拼接还原）、`TestProxy_Embeddings_Anonymize`（`input` 脱敏）、`TestProxy_FailClosed_Blocks`（`detector_unavailable` → 500 阻断）
+- [x] **1.5 内嵌调试面板 + Playground**：
+  - `gateway/debug`：go:embed 静态资源（`assets/index.html` `style.css` `app.js`）+ `Store` 200 条环形缓冲 + `Hub` 多订阅者非阻塞广播 + `Handler` 路由（`/_debug`、`/ws/events`、`GET|DELETE /_api/traffic`、`POST /_api/detect`、`POST /_api/replace`）+ cmd 行 `--no-debug` 一键关闭
+  - pipeline.Publisher 注入 + proxy 三段事件（`request.received` `request.replaced` `restore.done`）按 RequestID 合并
+  - `enc.SetEscapeHTML(false)` 在 `_api/traffic` 序列化时关闭 HTML 转义，保证占位符 `<<zh_phone_1>>` 字面输出
+  - 验收 `e2e/ui_smoke.sh` D1-D6 **11/11 PASS**
 
 ### 进行中
 
-- [ ] 1.5 内嵌调试面板 + Playground（go:embed + WebSocket + 环形缓冲）
-- [ ] 端到端验收（`curl localhost:8400/v1/chat/completions`） + Phase 1 收尾
+- [ ] 任务 5：`e2e/e2e.sh` + CI（GitHub Actions）+ 覆盖率门 + `cn-pii-bench` 骨架
+- [ ] Phase 1 收尾：移除孤儿 `trie.go`（safe-delete 阻碍 WSL 路径删除，留到 CI 链路打通后处理）
 
 ### 下一步
 

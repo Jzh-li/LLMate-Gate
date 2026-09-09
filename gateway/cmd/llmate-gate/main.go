@@ -15,6 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"gateway/debug"
 	"gateway/internal/audit"
 	"gateway/internal/cache"
 	"gateway/internal/circuit"
@@ -84,7 +85,7 @@ func main() {
 	})
 	guarded := circuit.NewGuardedClient(det, breaker)
 
-	// 替换器 + 仿真配置。
+	// 替换器 + 仿真配置（Replacer 接口含 SetStrategy，支持规则热加载）。
 	sessionKey := deriveSessionKey()
 	repl := replacer.New(replacer.Config{
 		Strategy:     cfg.Replacement.Strategy,
@@ -128,7 +129,18 @@ func main() {
 	m := metrics.New(reg)
 	metricHandler := promhttp.HandlerFor(reg, promhttp.HandlerOpts{})
 
-	// 编排器（Publisher 在调试面板就绪后注入，见 internal/debug）。
+	// 内嵌调试面板（任务 1.5）：Hub + Store（受 --no-debug / debug=false 门控）。
+	var (
+		debugStore *debug.TrafficRecordStore
+		debugHub   *debug.Hub
+	)
+	if cfg.Gateway.Debug {
+		debugStore = debug.NewTrafficStore(200)
+		debugHub = debug.NewHub(debugStore)
+	}
+	publisher := toPublisher(debugHub)
+
+	// 编排器（Publisher 即 debugHub 或 NopPublisher）。
 	proc := pipeline.New(pipeline.Config{
 		Detector:   guarded,
 		Replacer:   repl,
@@ -136,7 +148,7 @@ func main() {
 		Cache:      dc,
 		Audit:      alog,
 		Metrics:    m,
-		Publisher:  nil,
+		Publisher:  publisher,
 		UseCache:   cfg.Detection.Cache.Enabled,
 		FailClosed: cfg.Policy.FailClosed,
 	})
@@ -158,7 +170,16 @@ func main() {
 	})
 	srv.SetMetricHandler(metricHandler)
 
-	// TODO(task4): 若 cfg.Gateway.Debug，挂载 internal/debug 路由到 srv.Mux()。
+	// 挂载调试面板路由（debug=true 时；--no-debug 时 cfg.Gateway.Debug=false 已生效）。
+	if cfg.Gateway.Debug {
+		dh := debug.NewHandler(cfg, guarded, repl, debugHub, debugStore, func(strategy string) error {
+			return repl.SetStrategy(strategy)
+		})
+		dh.Mount(srv.Mux())
+		log.Printf("[llmate-gate] debug panel mounted at %s/_debug", cfg.Gateway.Listen)
+	} else {
+		log.Printf("[llmate-gate] debug panel disabled (--no-debug or config.debug=false)")
+	}
 
 	// 信号：优雅退出。
 	sig := make(chan os.Signal, 1)
@@ -166,6 +187,9 @@ func main() {
 	go func() {
 		<-sig
 		log.Printf("[llmate-gate] shutting down")
+		if debugHub != nil {
+			debugHub.Close()
+		}
 		cancel()
 	}()
 
@@ -186,4 +210,12 @@ func deriveSessionKey() []byte {
 		return []byte("llmate-gate-default-session-key-32b")
 	}
 	return k
+}
+
+// toPublisher 把可选的 debug.Hub 适配为 pipeline.EventPublisher；hub==nil 返回 NopPublisher。
+func toPublisher(h *debug.Hub) pipeline.EventPublisher {
+	if h == nil {
+		return pipeline.NopPublisher{}
+	}
+	return h
 }

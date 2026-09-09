@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>LLMate Gate · 调试面板</title>
+<link rel="stylesheet" href="/_debug/style.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">⚡</span>
+    <span class="title">LLMate Gate</span>
+    <span class="sub">调试面板</span>
+  </div>
+  <div class="status">
+    <span id="wsStatus" class="dot off" title="WebSocket 连接状态"></span>
+    <span id="wsStatusText">未连接</span>
+    <button id="clearTraffic" class="btn">清空流量</button>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="traffic">流量</button>
+  <button class="tab" data-tab="playground">Playground</button>
+  <button class="tab" data-tab="rules">规则配置</button>
+</nav>
+
+<main>
+  <!-- Tab 1: 流量 -->
+  <section id="tab-traffic" class="tab-pane active">
+    <aside class="traffic-list">
+      <div class="list-header">
+        <span>请求时间线</span>
+        <span id="trafficCount" class="count">0</span>
+      </div>
+      <ul id="trafficList" class="list"></ul>
+    </aside>
+    <article class="traffic-detail">
+      <div id="emptyState" class="empty">
+        <p>还没有流量记录。</p>
+        <p class="hint">先发一次 <code>POST /v1/chat/completions</code>，或试试 Playground。</p>
+      </div>
+      <div id="detailBody" class="detail hidden">
+        <div class="detail-header">
+          <div>
+            <span class="method" id="dMethod">POST</span>
+            <span class="path" id="dEndpoint">/v1/chat/completions</span>
+            <span class="badge" id="dOutcome">passed</span>
+            <span class="duration" id="dDuration">— ms</span>
+          </div>
+          <div class="meta">
+            <span>Request ID: <code id="dReqID">—</code></span>
+            <span>Strategy: <code id="dStrategy">placeholder</code></span>
+          </div>
+        </div>
+        <section class="block">
+          <h4>① 原始请求 (User → Proxy)</h4>
+          <pre id="dRaw" class="code"></pre>
+        </section>
+        <section class="block">
+          <h4>② 检测到的 PII (<span id="dEntityCount">0</span>)</h4>
+          <ul id="dEntities" class="entity-list"></ul>
+        </section>
+        <section class="block">
+          <h4>③ 脱敏后请求 (Proxy → Upstream)</h4>
+          <pre id="dReplaced" class="code"></pre>
+        </section>
+        <section class="block">
+          <h4>④ 映射表 (Vault)</h4>
+          <table id="dMapping" class="mapping-table">
+            <thead><tr><th>占位符</th><th>类型</th><th>原始值</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </section>
+        <section class="block">
+          <h4>⑤ 上游响应 → 还原后响应</h4>
+          <div class="split">
+            <div>
+              <h5>上游响应</h5>
+              <pre id="dUpstream" class="code"></pre>
+            </div>
+            <div>
+              <h5>还原后响应</h5>
+              <pre id="dRestored" class="code"></pre>
+            </div>
+          </div>
+        </section>
+        <section class="block error-block hidden" id="dErrorBlock">
+          <h4>错误</h4>
+          <pre id="dError" class="code error"></pre>
+        </section>
+      </div>
+    </article>
+  </section>
+
+  <!-- Tab 2: Playground -->
+  <section id="tab-playground" class="tab-pane">
+    <div class="pg-row">
+      <label>输入文本（不会落盘）</label>
+      <textarea id="pgInput" rows="6" placeholder="如：我叫张三，手机 13800138000，邮箱 zhangsan@example.com">我叫李晓明，身份证 11010519491231002X，手机 13945188234，邮箱 wang@corp.com</textarea>
+    </div>
+    <div class="pg-controls">
+      <label>策略
+        <select id="pgStrategy">
+          <option value="placeholder">占位符（v1）</option>
+          <option value="simulate" disabled>仿真替换（v1.1 可用）</option>
+        </select>
+      </label>
+      <button id="pgDetect" class="btn primary">仅检测</button>
+      <button id="pgReplace" class="btn primary">检测 + 替换</button>
+      <span id="pgHint" class="hint">所有操作仅本地调用，<strong>永不出站</strong>。</span>
+    </div>
+    <div class="pg-results">
+      <section class="block">
+        <h4>检测到的实体</h4>
+        <ul id="pgEntities" class="entity-list"></ul>
+      </section>
+      <section class="block">
+        <h4>替换预览（占位符 / 仿真）</h4>
+        <pre id="pgReplaced" class="code"></pre>
+      </section>
+      <section class="block">
+        <h4>映射</h4>
+        <table id="pgMapping" class="mapping-table">
+          <thead><tr><th>占位符</th><th>类型</th><th>原始值</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
+    </div>
+  </section>
+
+  <!-- Tab 3: 规则 -->
+  <section id="tab-rules" class="tab-pane">
+    <div class="block">
+      <h4>当前策略</h4>
+      <p>替换策略：<code id="ruleStrategy">placeholder</code></p>
+      <p>不可逆类型（需重启生效）：<code id="ruleIrreversible">—</code></p>
+    </div>
+    <div class="block">
+      <h4>热加载</h4>
+      <label>新策略
+        <select id="ruleStrategySelect">
+          <option value="placeholder">占位符（placeholder）</option>
+          <option value="simulate">仿真（simulate）</option>
+        </select>
+      </label>
+      <button id="ruleApply" class="btn primary">应用</button>
+      <span id="ruleStatus" class="hint"></span>
+    </div>
+  </section>
+</main>
+
+<script src="/_debug/app.js"></script>
+</body>
+</html>

@@ -4,7 +4,7 @@
 
 ## 当前阶段：Phase 1 · 任务 1.1-1.5（代理核心 + 内嵌调试面板）
 
-## 当前任务：任务 5 E2E 已完成（mock 链路 + 18 项断言全绿），下一步 CI + 覆盖率门 + cn-pii-bench
+## 当前任务：Phase 1 全部完成（任务 1.1-1.6 + 调试面板 + 任务 5 E2E/CI/bench + trie 清理），下一步 Phase 2
 
 ## 状态：执行中
 
@@ -54,7 +54,6 @@
 
 ### 进行中
 
-- [ ] Phase 1 收尾：移除孤儿 `trie.go`（safe-delete 阻碍 WSL 路径删除，留到 CI 链路打通后处理）
 - [ ] Phase 2：tool-call 递归扫描 / per-type fate / VS Code 扩展 / Claude Code hooks
 
 ### 探路记录

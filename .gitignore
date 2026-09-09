@@ -8,7 +8,7 @@ cover.html
 
 # 本地运行产物
 vault_data/
-vault_data_e2e*/
+vault_data*/
 audit.log
 *.log
 .env

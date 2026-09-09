@@ -20,9 +20,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -50,9 +50,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -66,7 +66,7 @@ jobs:
           CGO_ENABLED=0 go build -o ../build/mock-llm ./cmd/mock-llm
           CGO_ENABLED=0 go build -o ../build/mock-detector ./cmd/mock-detector
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: llmate-gate-linux-amd64
           path: |
@@ -83,9 +83,9 @@ jobs:
       GATEWAY_AUTH_TOKEN: ci-token-12345
       LMGATE_BUILD: ${{ github.workspace }}/build
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -111,9 +111,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -126,7 +126,7 @@ jobs:
           go tool cover -func=coverage.out > coverage.txt
           grep -E '^total:' coverage.txt | tee coverage-total.txt
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: coverage-report
           path: |
@@ -140,12 +140,13 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      PYTHONUTF8: '1'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
+      # 不引入 setup-python：runner 自带 python3 足够，少一个 Node20 action 依赖
       - name: 校验 cn-pii-bench fixture
-        run: python bench/validate.py
+        run: |
+          python3 -V
+          python3 bench/validate.py

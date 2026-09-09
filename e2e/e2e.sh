@@ -19,6 +19,11 @@
 
 set -uo pipefail
 
+# 环境里的 HTTP(S)_PROXY 会把 127.0.0.1 请求也走代理，导致本地/沙箱出现假 502。
+# 所有请求均为 loopback，统一绕过代理。
+export NO_PROXY='*'
+export no_proxy='*'
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Windows 平台判定（git-bash / MSYS / Cygwin）
@@ -233,30 +238,23 @@ assert_nomatch  "13800138000"     "$UP2"     "E2 upstream body has no raw PII"
 # ---------- E3: SSE streaming ----------
 echo
 echo "[E3] SSE stream: rune-chunked placeholder -> client should see original PII"
-echo "[E3]   NOTE: 跨 SSE 事件边界的占位符还原需要单独的 post-processing pass（TODO 2.4）"
-# mock-llm 把响应切成 8-rune chunks 流式发出，会把 <<email_1>> 拆到两个 SSE 事件里。
-# 当前 StreamRestorer 在同一 buf 内做匹配，无法跨事件边界。
-# 但 mock-llm 返回的每个事件内含『<<』字面（enc.SetEscapeHTML(false)），且同 buf 内
-# 多个 chunk 衔接时，buf 会被 filler JSON 结构污染。
-SKIP_E3="${SKIP_E3:-1}"  # 跳过 E3 客户端断言；其余断言仍跑
+# mock-llm 把响应切成 8-rune chunks，<<email_1>> 会被拆到多个 SSE 事件里；
+# 网关必须在「内容维度」跨事件还原（SSE 帧不属于内容，不能污染占位符字节）。
+SKIP_E3="${SKIP_E3:-1}"  # TODO(Phase2-2.4): 跨 SSE 事件还原修好后改为 0
+curl -fsS "http://127.0.0.1:${LLM_PORT}/_received/all?reset=1" >/dev/null 2>&1 || true
+E3_RAW=$(curl -fsS -m 10 -N -X POST "$GW1/v1/chat/completions" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"mock-1","messages":[{"role":"user","content":"我的邮箱 zhangsan@example.com"}],"stream":true}' 2>/dev/null || echo "")
+sleep 0.3
+UP3=$(decoded_received)
 if [ "$SKIP_E3" = "1" ]; then
-  curl -fsS "http://127.0.0.1:${LLM_PORT}/_received/all?reset=1" >/dev/null 2>&1 || true
-  E3_RAW=$(curl -fsS -m 5 -N -X POST "$GW1/v1/chat/completions" \
-    -H "Authorization: Bearer $TOKEN" \
-    -H "Content-Type: application/json" \
-    -d '{"model":"mock-1","messages":[{"role":"user","content":"我的邮箱 zhangsan@example.com"}],"stream":true}' 2>/dev/null || echo "")
-  # 即使客户端不能拼回原文，也验证「raw output 没有 raw PII 泄漏」（不该把邮箱直接发回客户端）。
-  PH_EMAIL_OPEN='<<email_[0-9]+>>'
-  # 上游必须收到 placeholder（先做清空重置 → 上面的 reset 已执行）。
-  sleep 0.3
-  UP3=$(decoded_received)
-  # 跳过上游断言：mock 在 SSE 模式下两个 chunk 都打 _received 时，会覆盖。
-  echo "  [E3] SKIP-client-restore (cross-event placeholder TODO)"
-  PASSED=$((PASSED + 0))
+  echo "  [E3] SKIP (SKIP_E3=1)"
 else
+  if [ -n "$E3_DEBUG" ]; then echo "  [E3][debug] raw=$E3_RAW"; fi
+  assert_re_match '<<email_[0-9]+>>' "$UP3" "E3 upstream body contains email placeholder"
   assert_match "zhangsan@example.com" "$E3_RAW" "E3 stream response contains original PII (email)"
   assert_re_nomatch '<<email_[0-9]+>>' "$E3_RAW" "E3 stream response has no raw placeholder leak"
-  assert_re_match '<<email_[0-9]+>>' "$UP3" "E3 upstream body contains email placeholder"
 fi
 
 # ---------- E4: cache 幂等性 ----------

@@ -1,0 +1,44 @@
+# ui_smoke 专用：上游指向本地未监听端口，保证「不出网」且快速失败。
+# ui_smoke 只断言调试面板与网关自身行为，不依赖上游返回。
+gateway:
+  listen: ":8400"
+  upstream: "http://127.0.0.1:9"
+  auth_token: "${GATEWAY_AUTH_TOKEN}"
+  upstream_api_key: "ui-smoke-no-auth"
+  request_timeout: "3s"
+  debug: true
+  debug_bind: "127.0.0.1"
+  log_level: "info"
+
+detection:
+  engine: "regex"
+  fallback_regex: true
+  thresholds:
+    zh_person_name: 0.5
+    zh_phone: 0.8
+    zh_id_card: 0.9
+    email: 0.7
+  cache:
+    enabled: true
+    bind_conversation: true
+    ttl: "5m"
+    max_entries: 1000
+
+replacement:
+  strategy: "placeholder"
+  irreversible: []
+
+policy:
+  fail_closed: true
+  tool_call_scan: true
+  stream_restore: true
+
+vault:
+  path: "./vault_data_uismoke"
+  encryption: "aes-256-gcm"
+  key_derivation: "scrypt"
+  request_ttl: "30m"
+  persist: false
+
+audit:
+  enabled: false

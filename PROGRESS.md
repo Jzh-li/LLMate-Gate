@@ -52,6 +52,22 @@
   - `bench/fixtures/cases.{jsonl,schema.json}`：10 个 v0.1 合成样本（含 8 类 PII + 1 个 negative）
   - `bench/validate.py`：JSONL 自检（id/text/expect/start/end/value 一致性），CI 可直接 `python bench/validate.py` 挂门
 
+### CI 状态修复（2026-09-10）
+
+用户反馈「流水线没跑过」。定位到 4 个根因（均已修复并推送 `5f1452a`）：
+
+| # | 根因 | 现象 | 修复 |
+|---|---|---|---|
+| 1 | `gateway/go.sum` 被 `.gitignore` 排除 | 干净 checkout 无法 `go mod verify` / `go test`（缺 go.sum entry） | 解除忽略并入库 |
+| 2 | `go.mod` 缺 `kr/text`、`prometheus/procfs` 间接依赖 | readonly 模式下 `go test ./...` 直接报 "updates to go.mod needed" | `go mod tidy` 对齐，CI 增加 `go mod tidy -diff` 守门 |
+| 3 | `e2e.sh` 硬编码 `.exe` + `taskkill`；CI 里该步骤还被 `\| head` 掩盖退出码 | Linux runner 上 E2E 实际从未执行，且失败静默通过 | 按 `uname` 判定 EXE 后缀与进程清理方式；CI 真实调用 `./e2e/e2e.sh` |
+| 4 | 脚本无执行位 + 断言硬写 `python` | CI 直接 permission denied；ubuntu-latest 只有 `python3` | 补 `100755`；断言统一走 `$PYTHON`（python3 优先） |
+
+附带修复：Windows 下 `cygpath -m` 把 POSIX 路径转成 `C:/...`，否则网关报 `invalid_config: read config file`。
+新增 `workflow_dispatch`，可手动触发。
+
+本地验证（干净 clone 自 origin/main，等同 CI）：`go mod verify` ✓ / `vet` ✓ / `go test ./...` 全绿 / e2e 18/18 / ui_smoke 11/11 / bench validate PASS。
+
 ### 进行中
 
 - [ ] Phase 2：tool-call 递归扫描 / per-type fate / VS Code 扩展 / Claude Code hooks

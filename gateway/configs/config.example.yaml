@@ -1,0 +1,67 @@
+# LLMate Gate 配置示例（对齐《接口与数据契约规范.md》§3.1）
+# 用法：./llmate-gate --config ./configs/config.example.yaml
+
+gateway:
+  listen: ":8400"                        # 必须以 ':' 开头
+  upstream: "https://api.openai.com"     # 必填
+  auth_token: "${GATEWAY_AUTH_TOKEN}"    # 客户端访问网关的令牌（支持 ${ENV} 展开）
+  upstream_api_key: "${OPENAI_API_KEY}"  # 转发上游时使用的密钥，不透传客户端凭证
+  request_timeout: "30s"
+  debug: true                            # 内嵌调试面板（--no-debug 可彻底关闭）
+  debug_bind: "127.0.0.1"                # 面板仅绑定回环地址
+  log_level: "info"
+
+detection:
+  # pii-engineer : 调用 PII Engineer sidecar（Rust/ONNX，中文 F1 0.918）
+  # regex        : 内置中文正则引擎，无需模型，开箱即用（默认）
+  engine: "regex"
+  fallback_regex: true                   # 格式固定实体走正则加速，不进模型
+  sidecar:
+    command: "cargo run --release"       # 拉起 PII Engineer
+    endpoint: "http://127.0.0.1:8000"
+    healthz: "/healthz"
+    start_timeout: "60s"
+    restart_limit: 3
+    auto_start: false                    # true 时由网关 exec 拉起子进程
+  thresholds:                            # score >= 阈值才脱敏
+    zh_person_name: 0.5
+    zh_phone: 0.8
+    zh_id_card: 0.9
+    zh_bank_card: 0.9
+    zh_address: 0.6
+    email: 0.7
+  cache:
+    enabled: true
+    bind_conversation: true              # 缓存键强制绑定 conversation_id
+    ttl: "30m"
+    max_entries: 10000
+
+replacement:
+  strategy: "placeholder"                # placeholder | simulate(v1.1)
+  simulate_zh:
+    person_name: true
+    phone: true
+    id_card: true
+    bank_card: true
+  irreversible:
+    - api_key
+    - password
+    - token
+
+policy:
+  fail_closed: true                      # 检测异常即阻断，绝不裸奔
+  tool_call_scan: true                   # 递归扫描 tool_calls 参数
+  stream_restore: true                   # SSE trie 缓冲还原
+
+vault:
+  path: "./vault_data"
+  encryption: "aes-256-gcm"
+  key_derivation: "scrypt"
+  request_ttl: "30m"
+  persist: false                         # 默认不落盘，仅内存 + 请求生命周期
+
+audit:
+  enabled: true
+  path: "./audit.log"
+  export: ["pip", "gdpr"]
+  log_pii: false                         # 审计默认不记录原文

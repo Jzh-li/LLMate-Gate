@@ -1,0 +1,27 @@
+# Go
+/llmate-gate
+/llmate-gate.exe
+*.exe
+*.test
+cover.out
+cover.html
+
+# 本地运行产物
+vault_data/
+audit.log
+*.log
+.env
+
+# 依赖与构建缓存
+node_modules/
+dist/
+target/
+
+# 敏感 fixture（仅本地使用）
+**/testdata/private/
+
+# 编辑器
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

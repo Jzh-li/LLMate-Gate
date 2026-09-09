@@ -41,6 +41,18 @@ else
   E2E_DET_CFG="${BUILD_DIR}/gateway/configs/e2e-detector.yaml"
 fi
 
+# Windows 二进制无法解析 git-bash 的 POSIX 路径（/c/...），需转成 C:/...
+native_path() {
+  local p="$1"
+  if [ -n "$EXE" ] && command -v cygpath >/dev/null 2>&1; then
+    cygpath -m "$p" 2>/dev/null || printf '%s' "$p"
+  else
+    printf '%s' "$p"
+  fi
+}
+E2E_LLM_CFG="$(native_path "$E2E_LLM_CFG")"
+E2E_DET_CFG="$(native_path "$E2E_DET_CFG")"
+
 LLM_PORT=8999
 GW1_PORT=8401
 GW2_PORT=8402

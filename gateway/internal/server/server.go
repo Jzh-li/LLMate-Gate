@@ -176,13 +176,24 @@ func wrap(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// Start 启动 HTTP 服务（阻塞）。
-func (s *Server) Start(addr string) error {
+// Start 启动 HTTP 服务（阻塞）；当 ctx 取消时优雅关闭并释放监听端口，
+// 使进程随后退出——这是 main 信号处理的落点。若旧进程不退出，
+// 依赖重启的脚本（如 e2e/ui_smoke.sh 的 --no-debug 重启）会永久挂死。
+func (s *Server) Start(ctx context.Context, addr string) error {
 	srv := &http.Server{
 		Addr:         addr,
 		Handler:      s.Handler(),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 60 * time.Second,
 	}
-	return srv.ListenAndServe()
+	go func() {
+		<-ctx.Done()
+		shCtx, shCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shCancel()
+		_ = srv.Shutdown(shCtx)
+	}()
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		return err
+	}
+	return nil
 }

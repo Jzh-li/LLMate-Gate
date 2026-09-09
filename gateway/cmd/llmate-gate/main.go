@@ -222,7 +222,7 @@ func main() {
 	}()
 
 	log.Printf("[llmate-gate] listening on %s (debug=%v)", cfg.Gateway.Listen, cfg.Gateway.Debug)
-	if err := srv.Start(cfg.Gateway.Listen); err != nil {
+	if err := srv.Start(ctx, cfg.Gateway.Listen); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
 }

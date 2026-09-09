@@ -122,6 +122,21 @@ redact + 可逆占位符）、`TestProxy_ToolCall_ArgumentsObject`（对象形�
 `TestProxy_ConversationIncremental`（多轮只扫新增段、累计检测 3 次、占位符不碰撞）。
 `go vet` ✓ / `go test ./...` 全绿（含 proxy/cache/policy/replacer）/ **e2e 维持 21/21**。
 
+### 缺陷修复（2026-09-10 续）：ui_smoke `--no-debug` 重启挂死 → 流水线 "The operation was canceled"
+
+现象：CI 的 e2e job 跑 `./e2e/ui_smoke.sh :8400` 时，D1-D4 全 PASS，到 `[ui_smoke] restarting with --no-debug ...` 后整条流水线被取消（"The operation was canceled"），撞 15 分钟超时。
+
+根因（两层）：
+1. **网关不退出**：`server.Server.Start` 原实现是裸 `srv.ListenAndServe()`，完全不监听 ctx；而 `main` 用 `signal.Notify(SIGTERM)` 接管了信号，使进程失去默认「收 SIGTERM 即退出」行为。收到 SIGTERM 只调 `cancel()`，`ListenAndServe` 永不返回 → 旧进程占着 `:8400` 不释放、也不退出。
+2. **脚本无限等**：`ui_smoke.sh` 的 `start_gateway` 重启时用 `wait "$PID"` 等旧进程退出，旧进程不退出 → `wait` 永久阻塞 → CI 超时取消。
+
+修复：
+- `internal/server/server.go`：`Start(ctx, addr)` 在 ctx 取消时 `srv.Shutdown`（5s 超时）优雅关闭、立即释放端口，使进程随后退出。
+- `cmd/llmate-gate/main.go`：`srv.Start(ctx, cfg.Gateway.Listen)` 透传 ctx。
+- `e2e/ui_smoke.sh`：把会永久阻塞的 `wait "$PID"` 换成「先 SIGTERM → 5s 内未退则 SIGKILL」的有界等待，杜绝回归再拖垮 CI。
+
+验证：`go vet` ✓ / `go test ./...` 全绿 / e2e 21/21 / **ui_smoke 11/11（D5 `--no-debug` 重启四向 404 全 PASS、D6 PASS）**。
+
 ### 进行中
 
 - [x] Phase 2 阶段 2：tool-call 参数逐值脱敏（键保留）、per-type fate 配置化、detection_cache Merkle 增量

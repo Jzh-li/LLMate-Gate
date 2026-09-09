@@ -63,8 +63,21 @@ start_gateway() {
   local extra="${1:-}"
   local i
   if [ -n "$PID" ]; then
+    # 优雅退出：先 SIGTERM，5s 内未退出再 SIGKILL，避免旧进程不释放端口时
+    # 无限等待导致 CI 挂死（"The operation was canceled"）。
     kill "$PID" 2>/dev/null || true
-    wait "$PID" 2>/dev/null || true
+    for i in $(seq 1 25); do
+      kill -0 "$PID" 2>/dev/null || break
+      sleep 0.2
+    done
+    if kill -0 "$PID" 2>/dev/null; then
+      echo "[ui_smoke] old gateway did not exit gracefully, sending SIGKILL"
+      kill -9 "$PID" 2>/dev/null || true
+      for i in $(seq 1 25); do
+        kill -0 "$PID" 2>/dev/null || break
+        sleep 0.2
+      done
+    fi
     PID=""
   fi
   # 等旧实例真正停止（healthz 不再响应）

@@ -18,6 +18,8 @@ import (
 type Replacer interface {
 	Replace(ctx context.Context, req *ReplaceRequest) (*ReplaceResult, error)
 	Restore(ctx context.Context, req *RestoreRequest) (string, error)
+	// Strategy 当前替换策略（placeholder | simulate）。
+	Strategy() string
 }
 
 // ReplaceRequest 脱敏入参（契约 §5.1）。
@@ -66,6 +68,14 @@ func New(cfg Config, v vault.Vault) Replacer {
 	g := simulator.New(cfg.SessionKey)
 	g.Cfg = cfg.Simulate
 	return &impl{cfg: cfg, sim: g, vault: v}
+}
+
+// Strategy 返回当前替换策略。
+func (r *impl) Strategy() string {
+	if r.cfg.Strategy == "" {
+		return "placeholder"
+	}
+	return r.cfg.Strategy
 }
 
 // Replace 对文本做脱敏（契约 §5.1/§5.2）。

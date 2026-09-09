@@ -33,6 +33,8 @@ type Vault interface {
 	Seal(table *types.MappingTable) ([]byte, error)
 	Unseal(data []byte) (*types.MappingTable, error)
 	Sweep() (int, error)
+	// Len 当前存活映射表数量（供 /metrics）。
+	Len() int
 }
 
 // ErrExpired 映射表过期（对外仍统一为 not_found，避免信息泄露）。

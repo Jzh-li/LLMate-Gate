@@ -17,6 +17,8 @@ type Cache interface {
 	Get(conversationID string, textHash [32]byte) (*types.DetectResponse, bool)
 	Put(conversationID string, textHash [32]byte, resp *types.DetectResponse) error
 	Invalidate(conversationID string) error
+	// Sweep 清理过期条目。
+	Sweep() int
 }
 
 type entry struct {

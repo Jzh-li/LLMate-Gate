@@ -7,26 +7,34 @@ import (
 	"gateway/pkg/types"
 )
 
-// StreamOrphanTotal 流结束时仍未闭合的哨兵串计数（契约 §5.3 metric: stream_orphan_placeholder）。
+// StreamOrphanTotal 流结束时仍未闭合/未匹配的哨兵串累计数（契约 §5.3 metric: stream_orphan_placeholder）。
 var StreamOrphanTotal atomic.Int64
 
-// StreamRestorer 流式还原器：接收上游 SSE 分块，跨块拼接哨兵串后还原（契约 §5.3）。
+// StreamOrphans 返回全局残留占位符累计数，供 /metrics 读取。
+func StreamOrphans() int64 { return StreamOrphanTotal.Load() }
+
+// StreamRestorer 流式还原器：接收上游分块（可能是 SSE 原始字节），在缓冲中跨块拼接
+// 哨兵串后还原为原文（契约 §5.3）。
 //
-// 规则：
-//   - 闭合后查映射表还原；查不到 → 保留原样（fail-safe，不报错）
-//   - Close() 时缓冲仍不完整 → 记录 metric，原样输出
+// 设计要点：
+//   - 哨兵串既可能是占位符模式的 `<<type_index>>`，也可能是仿真模式的仿真值
+//     （如「叶谈」），二者都不含统一分隔符，因此本实现对「哨兵串」做统一的多模式流式匹配，
+//     而非仅识别 `<<`/`>>` 定界符。
+//   - SSE 事件分隔符（\n\n）落在 data 字段之外，占位符字节在流中是连续的；本实现通过
+//     缓冲「可能是某哨兵串前缀」的尾部字节来保证跨块拼接，哨兵串被完整到达即还原，
+//     否则保留缓冲等待后续分块。查不到（不匹配且无前缀关系）→ 原样透传（fail-safe）。
 type StreamRestorer struct {
-	trie *sentinelTrie
-	buf  []byte
+	table map[string]string // 哨兵串 → 原值
+	buf   []byte             // 跨块缓冲，仅保留「可能成为哨兵前缀」的尾部
 }
 
 // NewStreamRestorer 基于映射条目构造流式还原器。
 func NewStreamRestorer(entries []entryPair) *StreamRestorer {
-	t := newSentinelTrie()
+	t := make(map[string]string, len(entries))
 	for _, e := range entries {
-		t.Insert(e.sentinel, e.restoreTo)
+		t[e.sentinel] = e.restoreTo
 	}
-	return &StreamRestorer{trie: t}
+	return &StreamRestorer{table: t}
 }
 
 // entryPair 上游可见串 → 还原目标。
@@ -41,7 +49,7 @@ func NewStreamRestorerFromEntries(entries []types.MappingEntry) *StreamRestorer 
 }
 
 // EntryPairs 把映射条目转为 (哨兵串 → 原值) 对，供 StreamRestorer 使用。
-// 不可逆（redact）条目不参与还原；mask 条目保留遮盖形态。
+// 不可逆（redact）条目不参与还原；mask 条目保留遮盖形态（不在此还原）。
 func EntryPairs(entries []types.MappingEntry) []entryPair {
 	out := make([]entryPair, 0, len(entries))
 	for _, e := range entries {
@@ -53,51 +61,73 @@ func EntryPairs(entries []types.MappingEntry) []entryPair {
 	return out
 }
 
-// Write 接收上游分块，返回可立即输出的已还原块（契约 §5.3）。
+// Write 接收上游分块，返回可立即输出的已还原字节（契约 §5.3）。
 func (s *StreamRestorer) Write(chunk []byte) ([]byte, error) {
-	if s.trie == nil {
+	if s.table == nil {
 		return chunk, nil
 	}
 	s.buf = append(s.buf, chunk...)
 	var out []byte
-	for len(s.buf) > 0 {
-		// 跳过不可能成为哨兵串起点的字节
-		i := 0
-		for i < len(s.buf) && !s.trie.hasStart(s.buf[i]) {
-			i++
-		}
-		if i > 0 {
-			out = append(out, s.buf[:i]...)
-			s.buf = s.buf[i:]
-		}
-		if len(s.buf) == 0 {
-			break
-		}
-		n, val, ok := s.trie.longestMatch(s.buf)
-		if ok {
+	i := 0
+	for i < len(s.buf) {
+		// 1) 是否有哨兵从位置 i 开始（取最长匹配，避免「叶」与「叶谈」冲突）。
+		if val, slen := s.matchAt(i); slen > 0 {
 			out = append(out, val...)
-			s.buf = s.buf[n:]
+			i += slen
 			continue
 		}
-		if s.trie.isPrefix(s.buf) {
-			// 需要更多数据才能判定，留缓冲等待下一块
+		// 2) buf[i:] 是某哨兵串的严格前缀 → 必须留在缓冲，等后续分块补全后再还原。
+		if s.isPrefixOfAny(s.buf[i:]) {
 			break
 		}
-		// 不构成任何哨兵串前缀：吐掉首字节继续
-		out = append(out, s.buf[0])
-		s.buf = s.buf[1:]
+		// 3) 普通字节，安全透传。
+		out = append(out, s.buf[i])
+		i++
 	}
+	s.buf = s.buf[i:]
 	return out, nil
+}
+
+// matchAt 返回从 i 开始的最长匹配哨兵的原值与长度（slen==0 表示无匹配）。
+func (s *StreamRestorer) matchAt(i int) (string, int) {
+	best := ""
+	bestLen := 0
+	for k, v := range s.table {
+		if len(k) > bestLen && bytes.HasPrefix(s.buf[i:], []byte(k)) {
+			bestLen = len(k)
+			best = v
+		}
+	}
+	return best, bestLen
+}
+
+// isPrefixOfAny 判断 suffix 是否为某个哨兵串的严格前缀（长度更短且为其前缀）。
+func (s *StreamRestorer) isPrefixOfAny(suffix []byte) bool {
+	if len(suffix) == 0 {
+		return false
+	}
+	for k := range s.table {
+		if len(k) > len(suffix) && bytes.HasPrefix([]byte(k), suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // Close 刷新剩余缓冲；残留不完整哨兵串计入 metric（契约 §5.3）。
 func (s *StreamRestorer) Close() ([]byte, error) {
-	if s.trie == nil {
+	if s.table == nil {
 		return nil, nil
 	}
-	out := s.buf
-	if bytes.Contains(out, []byte("<<")) {
+	var out []byte
+	if val, slen := s.matchAt(0); slen > 0 {
+		out = append(out, val...)
+	} else if s.isPrefixOfAny(s.buf) {
+		// 残留为某哨兵前缀，无法还原 → 计入 orphan，原样吐出（fail-safe，不丢数据）。
 		StreamOrphanTotal.Add(1)
+		out = append(out, s.buf...)
+	} else {
+		out = append(out, s.buf...)
 	}
 	s.buf = nil
 	return out, nil

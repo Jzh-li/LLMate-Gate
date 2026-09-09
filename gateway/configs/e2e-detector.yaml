@@ -1,0 +1,52 @@
+# E2E 测试：使用 PII Engineer sidecar + mock-detector（可人为 --sleep / --respond-fail）。
+# 跑法：mock-detector --listen :18000 --sleep 3 &
+#       llmate-gate --config e2e-detector.yaml --listen :8402 &
+gateway:
+  listen: ":8402"
+  upstream: "http://127.0.0.1:8999"
+  auth_token: "${GATEWAY_AUTH_TOKEN}"
+  upstream_api_key: "mock-llm-no-auth-needed"
+  request_timeout: "10s"
+  debug: false
+  debug_bind: "127.0.0.1"
+  log_level: "info"
+
+detection:
+  engine: "pii-engineer"
+  fallback_regex: true
+  sidecar:
+    command: "true"        # mock-detector 由测试手工启动
+    endpoint: "http://127.0.0.1:18000"
+    healthz: "/healthz"
+    start_timeout: "5s"
+    restart_limit: 0
+    auto_start: false
+  thresholds:
+    zh_person_name: 0.5
+    zh_phone: 0.8
+    zh_id_card: 0.9
+    email: 0.7
+  cache:
+    enabled: true
+    bind_conversation: true
+    ttl: "5m"
+    max_entries: 1000
+
+replacement:
+  strategy: "placeholder"
+  irreversible: []
+
+policy:
+  fail_closed: true
+  tool_call_scan: true
+  stream_restore: true
+
+vault:
+  path: "./vault_data_e2e2"
+  encryption: "aes-256-gcm"
+  key_derivation: "scrypt"
+  request_ttl: "30m"
+  persist: false
+
+audit:
+  enabled: false

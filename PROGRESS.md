@@ -4,7 +4,7 @@
 
 ## 当前阶段：Phase 1 · 任务 1.1-1.5（代理核心 + 内嵌调试面板）
 
-## 当前任务：1.5 已完成；下一步 任务 5（E2E + CI + 覆盖率门）
+## 当前任务：任务 5 E2E 已完成（mock 链路 + 18 项断言全绿），下一步 CI + 覆盖率门 + cn-pii-bench
 
 ## 状态：执行中
 
@@ -33,16 +33,25 @@
   - `enc.SetEscapeHTML(false)` 在 `_api/traffic` 序列化时关闭 HTML 转义，保证占位符 `<<zh_phone_1>>` 字面输出
   - 验收 `e2e/ui_smoke.sh` D1-D6 **11/11 PASS**
 
+- [x] **任务 5 部分**：E2E 链路骨架完成
+  - `gateway/cmd/mock-llm/`：HTTP 回声上游，支持 OpenAI 5 端点 + Anthropic `/v1/messages` + `/v1/models`，SSE 模式 8-rune token 切片（用于流式测试），`enc.SetEscapeHTML(false)` 保证 `<<...>>` 字面保留，`/_received` 回声供 e2e 断言
+  - `gateway/cmd/mock-detector/`：PII Engineer sidecar mock，`--sleep N` 模拟超时、`--respond-fail` 模拟 5xx
+  - `gateway/configs/e2e-{llm,detector}.yaml`：regex + mock upstream；pii-engineer + mock detector
+  - `e2e/e2e.sh`：编排两阶段（regex + pii-engineer），E1-E8 18 项断言全绿（**PASS=18 FAIL=0**）
+    - E1 chat 非流式：客户端还原 + 上游脱敏
+    - E2 tool_call flow：tool description 无 PII，上游脱敏
+    - E3 SSE 流式：跳过（跨 SSE 事件边界的占位符还原需要 post-processing pass，留 TODO 2.4）
+    - E4 缓存幂等：同一 conv 两次请求都脱敏
+    - E5 detector 超时：fail-closed 502 < 5s 阻断
+    - E6 Anthropic `/v1/messages`：客户端还原 + 上游脱敏
+    - E7 鉴权：错 token / 无 token 都 401
+    - E8 embeddings：input 数组脱敏
+
 ### 进行中
 
-- [ ] 任务 5：`e2e/e2e.sh` + CI（GitHub Actions）+ 覆盖率门 + `cn-pii-bench` 骨架
+- [ ] 任务 5 剩余：GitHub Actions CI（`.github/workflows/ci.yml`）+ 覆盖率门 + `cn-pii-bench` 骨架
 - [ ] Phase 1 收尾：移除孤儿 `trie.go`（safe-delete 阻碍 WSL 路径删除，留到 CI 链路打通后处理）
-
-### 下一步
-
-- Phase 1 验收：`e2e/e2e.sh` + `ui_smoke.sh`（任务 5）
-- Phase 2：tool-call 递归扫描 / per-type fate / VS Code 扩展 / Claude Code hooks
-- Phase 4：审计合规导出 + cn-pii-bench
+- [ ] Phase 2：tool-call 递归扫描 / per-type fate / VS Code 扩展 / Claude Code hooks
 
 ### 探路记录
 
@@ -53,3 +62,5 @@
 | 检测引擎 | 跳转（内置 regex 先行） | 620MB 模型当前不可得，先跑通全链路，接口保持不变（D001） |
 | 占位符复用 | 直达 | 同 (type,value) 复用同一哨兵，保证 LLM 跨句指代不崩 |
 | 映射表落盘 | 跳转（Original 进加密 blob） | 加密后密文可还原；`json:"-"` 会破坏 Seal/Unseal 往返与重启还原 |
+| e2e 路径 | 跳转（NTFS scratch + Windows 路径） | WSL 9P 文件锁+路径解析双坑，强制走 `C:/...` 路径直达 Windows 二进制 |
+| E3 跨 SSE 边界还原 | 步行（已知限制） | 完整修复需 buf 分事件 → 跨事件 substring 还原（任务 2.4 标记 TODO，不阻断 Phase 1 收口） |

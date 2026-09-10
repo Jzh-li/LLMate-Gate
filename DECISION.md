@@ -125,3 +125,78 @@ python3 bench/validate.py
 # 用真实引擎跑基线指标
 cd gateway && go run ./cmd/bench-runner ../../bench/fixtures/cases.jsonl
 ```
+
+---
+
+## 8. 差异化清单（2026-09-11）
+
+> 本节是接管的索引。任何会话接手时先读本节，回答"我们凭什么 / 给谁看 / 现在做到哪一步"。
+> **本节只描述"已验证的事实差异"和"已识别的空白"，不列形容词式差异点（如"我们做得好"）。
+> 三层结构对应三类决策受众，每条差异都标注：竞品对应状态、当前落地状态、依据文件。
+
+### 8.0 三层结构与受众
+
+| 层 | 名称 | 受众 | 答什么问题 | 竞品追平成本 |
+|---|---|---|---|---|
+| 第 1 类 | **独占链**（竞品 100% 做不到） | 投资人 / 自己 | "这产品凭什么不可替代" | 3-6 个月重写链 |
+| 第 2 类 | **架构对齐**（竞品做到了但没做对） | 技术买家（架构师） | "为什么不是你直接 fork PrivAiTe 加中文" | 数周改造 |
+| 第 3 类 | **产品形态**（竞品没做的工程形态） | 最终用户（开发者） | "装这个要多久、坑多不多" | 1-2 周 |
+
+### 8.1 第 1 类 · 独占链（竞品 100% 做不到）
+
+| 差异点 | 竞品对应状态 | 当前落地 | 依据 / 下一步 |
+|---|---|---|---|
+| **中文 PII 形态学仿真**（校验位合法的身份证 / 号段合法的手机号 / 长度对齐的复姓） | Faker 加 zh locale 是单点；竞品要重写"仿真+同值映射+校验位算法"整链 | ✅ `internal/simulator` | `Specs/00` §5（仿真替换规则） |
+| **中文 planted PII 真机链路基准**（cn-pii-bench L3 真机 wire 测量） | 没有任何竞品做中文真机抓 wire；PrivAiTe 只做了 EN/FR/DE/IT | ❌ **空白** | `TODO_QUEUE.md` 末段·C 组；触发条件：v1 验收通过后启动 |
+| **结构化审计 + 中文合规导出**（PIPL/GDPR/等保 2.0/CSL/DSL 五段对比） | PrivAiTe 无 audit API；其他竞品只有 best-effort | ✅ `internal/audit` 五段对比 + 5 个 exporter | `Specs/02` §9；`gateway/internal/audit` |
+
+### 8.2 第 2 类 · 架构对齐（竞品做到了但没做对）
+
+> PrivAiTe 的核心是「协议级 allowlist/denylist + 递归 scrub + 真机链路测量」三件套。
+> 我们当前只做了第 2 件的子集；要做完才能和 PrivAiTe 在架构上对齐（中文差异化是单点加挂）。
+
+| 差异点 | 竞品对应状态 | 当前落地 | 下一步动作 |
+|---|---|---|---|
+| **tool_call arguments 递归扫描** | LiteLLM/LLM Guard **100% 漏 tool_call**（PrivAiTe COMPARISON.md 实测） | ✅ `proxy.transform(parsed, true, anon)` | 已对齐 |
+| **N 轮 round-trip 不泄漏**（agent 第 N+1 轮把还原真值重发出去） | 大多数竞品未考虑 | ✅ `internal/cache/merkle.go` | 已对齐 |
+| **Block allowlist**（不碰 thinking/base64/reasoning/mcp_list_tools 等不透明 part） | LiteLLM 把整 message 扔 Presidio，不区分 block | ❌ **缺** | **A 动作**：借 PrivAiTe `_BINARY_PART_TYPES` / `_THINKING_TYPES` 思路在 `privacy.go` 加过滤 |
+| **`gate_only` API**（只判不改，给 MCP-server / hook 边界用） | 几乎所有竞品只有 redact | ❌ **缺** | **B 动作**：在 `/v1/privacy/redact` 加 `gate_only=true` 参数 |
+| **Multimodal content parts 扫描**（image_url / text parts） | PrivAiTe 已实现 | ❌ **缺** | **B 组**：补 `bench/carriers.py` 的 multimodal 载体 |
+
+### 8.3 第 3 类 · 产品形态（竞品没做的工程形态）
+
+| 差异点 | 竞品对应状态 | 当前落地 | 依据 |
+|---|---|---|---|
+| **单 Go 二进制 + 零依赖**（10MB / <1s 启动 / ~30MB 内存） | Python 竞品需 pip install + 模型下载；Rust 竞品（cloakpipe/Eidolon）也是 Rust 工具链 | ✅ | `scripts/release.sh` 已交付 |
+| **三平台交叉编译 + Scoop / Homebrew**（OS-native 包管理器） | PrivAiTe 是 wheel；cloakpipe 是 cargo install；**无 OS-native** | ✅ | `scoop-bucket/llmate-gate.json`；`release.yml` |
+| **VS Code 扩展 + Claude Code hooks + MCP stdio 三件套** | 每个竞品只做一层（PrivAiTe 只有 hook） | ✅ | `vscode-ext/` + `hooks/` + `cmd/mcp-server/` |
+| **加密 vault 内存常驻 + 失败关闭 + 检测/替换/还原全可审计** | 多数竞品 vault 落盘 / 不 fail-closed | ✅ | `gateway/internal/vault`（AES-256-GCM） |
+
+### 8.4 已识别空白（**未做 = 真护城河机会**）
+
+> 这些是当前**没有**但**应该做**的差异点。每条对应 TODO_QUEUE 一个任务卡。
+
+| 空白 | 影响 | 建议触发时机 |
+|---|---|---|
+| **真机链路 wire 测量**（L3 benchmark） | 没它，中文差异化没有客观锚点 → 投资人/技术买家都无法被说服 | v1 验收通过 → 启动 4 周专项 |
+| **block allowlist**（防止 base64 / thinking / encrypted_content 误改） | 当前没保护，可能误判 / 改坏 | v0.2 立即（半天工作量，零风险） |
+| **`gate_only` API** | 当前 MCP/hook 只能 redact 不能只判 | v0.2 立即（半天工作量） |
+| **Multimodal 载体对等性** | `bench/carriers.py` 缺 multimodal 载体 | v0.2 立即（半天工作量） |
+
+### 8.5 怎么用本清单
+
+- **写 README §"与竞品对比"时** → 抄 §8.1 + §8.3 的"当前落地 ✅"行
+- **客户问"我已经有 Presidio/PrivAiTe，为什么还要你"** → 答 §8.1 + §8.2 的独占链
+- **判断 v1.1/v2 优先级时** → 看 §8.4"已识别空白"，按"对护城河贡献 × 工作量"排序
+- **避免"形容词差异点"陷阱** → 任何想新增的差异点必须填齐：竞品对应状态 + 当前落地 + 依据文件。任一空缺就退回
+- **多账号/多机器接管时** → 本节是项目根 `DECISION.md` 的一部分（git tracked），永远随代码走
+
+### 8.6 不做的清单（显式排除，避免范围蔓延）
+
+| 不做 | 理由 |
+|---|---|
+| **「我们做得好」式形容词差异** | 无可验证、无可决策；写出来就是文档垃圾 |
+| **「比竞品快 X%」式性能差异**（除非有 bench 数据） | 无数据 = 无差异；性能是必要条件不是差异化 |
+| **「支持更多语言」** | 与"中文一等公民"定位冲突，会稀释护城河 |
+| **「我们也支持模型 fine-tune」** | `Specs/00 §3.1` 已显式排除：集成而非训练 |
+| **「我们是开源的」** | PrivAiTe / Presidio / LLM Guard 都是开源，不是差异 |

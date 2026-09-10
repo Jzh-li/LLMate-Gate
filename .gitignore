@@ -19,6 +19,11 @@ dist/
 target/
 vscode-ext/out/
 
+# Python 编译产物
+__pycache__/
+*.pyc
+*.pyo
+
 # 敏感 fixture（仅本地使用）
 **/testdata/private/
 

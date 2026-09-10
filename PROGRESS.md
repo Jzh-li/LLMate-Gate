@@ -296,3 +296,46 @@ go1.26.8 工具链，破坏当前 Go 1.24 基线（CI pin 1.24.5）。故 **pin 
 | bench 匹配口径 | 直达（严格四元组） | 与 privaite-bench 一致；区间重叠评估会高估 F1，不利决策 |
 | PII Engineer 集成 | 步行（暂缓） | regex 已过验收线；模型 620MB + Rust 工具链需数小时 |
 | | | —— 应先优化 zh_address 再决定是否上 NER |
+
+---
+
+## 2026-09-10 21:40~21:42 · 最高 ROI 兑现：zh_address 召回优化
+
+### 基线（commit `d9798b8`）
+
+regex 引擎首测在 240 条合成语料上 F1=0.97，唯一短板 zh_address F1=0.80（FN=20/60）。
+根因：`reAddress` 顶部行政区划只接受 `X省|自治区`，4 直辖市（北京/上海/天津/重庆）
+没有省级前缀，整段被漏检。
+
+### 修复（commit `30c9de0`）
+
+`gateway/internal/detector/regex.go` reAddress 顶部改为可接受
+`[一-龥]{2,8}(?:省|自治区)|(?:北京市|上海市|天津市|重庆市)` —— 一行正则改动
+把 zh_address F1 从 0.80 拉到 **1.00**。
+
+`gateway/internal/detector/detector_test.go` 新增 `TestRegexEngine_AddressAllForms`
+覆盖 7 个子用例：省 2 / 直辖市 4 / 自治区 1 —— 防止未来回归。
+
+### 重跑 baseline（`phase0_regex-v2_20260910-214153.md`）
+
+| 指标 | regex-v1 | regex-v2 |
+|---|---|---|
+| precision | 1.0 | 1.0 |
+| recall | 0.9444 | **1.0** |
+| F1 | 0.9714 | **1.0** |
+| 延迟 p99 | 28ms | 23ms |
+
+分类型 F1 全 **1.0**：person_name / phone / id_card / bank_card / email / address。
+
+### 决策
+
+- **PII Engineer 集成确认暂缓**：合成语料已 F1=1.0，集成 NER（F1 0.918 / 180ms）反而会
+  拉低指标 + 6×延迟 —— 等真实对抗语料出现明确短板再启动
+- regex 已**完美**满足 Spark §16 v1 验收线（中文召回率 ≥ 85%）
+
+### 下一步（按 Spark Phase 4 路线）
+
+- Tauri 桌面托盘 UI（macOS / Windows / Linux 单二进制）
+- 打包分发（brew / scoop / AppImage）
+- v1 验收 §15 七项对账
+- cn-pii-bench 远程仓关联（等用户给地址）

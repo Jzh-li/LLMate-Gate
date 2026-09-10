@@ -210,15 +210,22 @@ func main() {
 	}
 
 	// 信号：优雅退出。
+	// 顺序很重要：必须**先 cancel() 再 Close()。cancel() 会让 HTTP server 立即开始
+	// 优雅关闭并最终让 Start 返回；若把 Close() 放在前面，一旦它阻塞，cancel() 就
+	// 永远执行不到 —— 进程既不退出也不释放端口，等待它的 CI 脚本会一直卡到超时。
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sig
 		log.Printf("[llmate-gate] shutting down")
+		cancel()
 		if debugHub != nil {
 			debugHub.Close()
 		}
-		cancel()
+		// 兜底：优雅关闭若卡住，第二个信号直接强制退出，避免进程悬挂。
+		<-sig
+		log.Printf("[llmate-gate] forced exit on second signal")
+		os.Exit(1)
 	}()
 
 	log.Printf("[llmate-gate] listening on %s (debug=%v)", cfg.Gateway.Listen, cfg.Gateway.Debug)

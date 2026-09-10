@@ -78,7 +78,7 @@ jobs:
     name: e2e & ui smoke
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       GATEWAY_AUTH_TOKEN: ci-token-12345
       LMGATE_BUILD: ${{ github.workspace }}/build
@@ -102,8 +102,11 @@ jobs:
       - name: E2E（E1-E8 契约验证）
         run: ./e2e/e2e.sh
 
+      # 用 timeout 包裹：脚本若卡住，7 分钟后明确非零退出并留下已打印的诊断，
+      # 而不是让整个 job 撞超时被 cancel（cancel 会丢日志，导致永远查不到原因）。
+      # 脚本内部另有 300s 的 watchdog 会主动 dump 现场。
       - name: UI 冒烟（D1-D6）
-        run: ./e2e/ui_smoke.sh :8400
+        run: timeout -k 5 420 ./e2e/ui_smoke.sh :8400
 
   coverage:
     name: coverage

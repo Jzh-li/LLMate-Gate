@@ -134,11 +134,11 @@ wait_listen() {
   local port="$1" timeout="${2:-15}" need_token="${3:-true}"
   for i in $(seq 1 $((timeout * 5))); do
     if [ "$need_token" = "true" ]; then
-      if curl -fsS -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1; then
+      if curl --max-time 30 -fsS -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1; then
         return 0
       fi
     else
-      if curl -fsS "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1; then
+      if curl --max-time 30 -fsS "http://127.0.0.1:${port}/healthz" >/dev/null 2>&1; then
         return 0
       fi
     fi
@@ -150,7 +150,7 @@ wait_listen() {
 # 取 mock-llm 最近一条请求体的「解码后 body」（避免 JSON 转义影响 << 匹配）。
 decoded_received() {
   local body
-  body=$(curl -fsS "http://127.0.0.1:${LLM_PORT}/_received" 2>/dev/null) || return 0
+  body=$(curl --max-time 30 -fsS "http://127.0.0.1:${LLM_PORT}/_received" 2>/dev/null) || return 0
   "$PYTHON" -c "import sys,json; d=json.loads(sys.argv[1]); print(d.get('body',''))" "$body" 2>/dev/null
 }
 
@@ -210,8 +210,8 @@ sleep 0.3
 echo
 echo "[E1] non-stream chat: PII -> placeholder -> upstream, client gets PII back"
 # 清空 _received
-curl -fsS "http://127.0.0.1:${LLM_PORT}/_received/all?reset=1" >/dev/null 2>&1 || true
-E1_BODY=$(curl -fsS -X POST "$GW1/v1/chat/completions" \
+curl --max-time 30 -fsS "http://127.0.0.1:${LLM_PORT}/_received/all?reset=1" >/dev/null 2>&1 || true
+E1_BODY=$(curl --max-time 30 -fsS -X POST "$GW1/v1/chat/completions" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"model":"mock-1","messages":[{"role":"user","content":"联系 13800138000"}]}')
@@ -225,8 +225,8 @@ assert_re_match '<<zh_phone_[0-9]+>>' "$UP1" "E1 upstream body contains zh_phone
 # ---------- E2: tool_call flow ----------
 echo
 echo "[E2] tool_call flow: phone in tool result -> anon -> restore"
-curl -fsS "http://127.0.0.1:${LLM_PORT}/_received/all?reset=1" >/dev/null 2>&1 || true
-E2_BODY=$(curl -fsS -X POST "$GW1/v1/chat/completions" \
+curl --max-time 30 -fsS "http://127.0.0.1:${LLM_PORT}/_received/all?reset=1" >/dev/null 2>&1 || true
+E2_BODY=$(curl --max-time 30 -fsS -X POST "$GW1/v1/chat/completions" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"model":"mock-1","stream":false,"tools":[{"type":"function","function":{"name":"call_phone","description":"call","parameters":{"type":"object"}}}],"messages":[{"role":"user","content":"帮我打 13800138000"}]}')
@@ -241,7 +241,7 @@ echo "[E3] SSE stream: rune-chunked placeholder -> client should see original PI
 # mock-llm 把响应切成 8-rune chunks，<<email_1>> 会被拆到多个 SSE 事件里；
 # 网关必须在「内容维度」跨事件还原（SSE 帧不属于内容，不能污染占位符字节）。
 SKIP_E3="${SKIP_E3:-0}"
-curl -fsS "http://127.0.0.1:${LLM_PORT}/_received/all?reset=1" >/dev/null 2>&1 || true
+curl --max-time 30 -fsS "http://127.0.0.1:${LLM_PORT}/_received/all?reset=1" >/dev/null 2>&1 || true
 E3_RAW=$(curl -fsS -m 10 -N -X POST "$GW1/v1/chat/completions" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
@@ -261,15 +261,15 @@ fi
 echo
 echo "[E4] cache: 同 conv 同一 PII 连续两次请求，上游都应收到 placeholder（幂等替换）"
 CONV="e2e-conv-$$"
-curl -fsS -X POST "$GW1/v1/chat/completions" \
+curl --max-time 30 -fsS -X POST "$GW1/v1/chat/completions" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -H "X-Conversation-ID: $CONV" \
   -d '{"model":"mock-1","messages":[{"role":"user","content":"13800138000"}]}' \
   > /dev/null 2>&1 || true
 sleep 0.3
-curl -fsS "http://127.0.0.1:${LLM_PORT}/_received/all?reset=1" >/dev/null 2>&1 || true
-curl -fsS -X POST "$GW1/v1/chat/completions" \
+curl --max-time 30 -fsS "http://127.0.0.1:${LLM_PORT}/_received/all?reset=1" >/dev/null 2>&1 || true
+curl --max-time 30 -fsS -X POST "$GW1/v1/chat/completions" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -H "X-Conversation-ID: $CONV" \
@@ -283,11 +283,11 @@ assert_re_match '<<zh_phone_[0-9]+>>' "$UP4" "E4 second request upstream still h
 # ---------- E7: auth ----------
 echo
 echo "[E7] auth: wrong / missing token -> 401"
-E7A=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$GW1/v1/chat/completions" \
+E7A=$(curl --max-time 30 -s -o /dev/null -w "%{http_code}" -X POST "$GW1/v1/chat/completions" \
   -H "Authorization: Bearer wrong-token" \
   -H "Content-Type: application/json" \
   -d '{"model":"mock-1","messages":[{"role":"user","content":"a"}]}')
-E7B=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$GW1/v1/chat/completions" \
+E7B=$(curl --max-time 30 -s -o /dev/null -w "%{http_code}" -X POST "$GW1/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -d '{"model":"mock-1","messages":[{"role":"user","content":"a"}]}')
 [ "$E7A" = "401" ] && echo "  PASS E7 wrong token -> 401" && PASSED=$((PASSED+1)) || { echo "  FAIL E7 wrong token -> 401 (got $E7A)"; FAILED=$((FAILED+1)); }
@@ -296,8 +296,8 @@ E7B=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$GW1/v1/chat/completions" 
 # ---------- E6: Anthropic /v1/messages ----------
 echo
 echo "[E6] /v1/messages: Anthropic-compat endpoint works through gateway"
-curl -fsS "http://127.0.0.1:${LLM_PORT}/_received/all?reset=1" >/dev/null 2>&1 || true
-E6_BODY=$(curl -fsS -X POST "$GW1/v1/messages" \
+curl --max-time 30 -fsS "http://127.0.0.1:${LLM_PORT}/_received/all?reset=1" >/dev/null 2>&1 || true
+E6_BODY=$(curl --max-time 30 -fsS -X POST "$GW1/v1/messages" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -H "anthropic-version: 2023-06-01" \
@@ -310,8 +310,8 @@ assert_nomatch   "13800138000"          "$UP6"     "E6 /v1/messages upstream bod
 # ---------- E8: embeddings ----------
 echo
 echo "[E8] /v1/embeddings: input array anonymized"
-curl -fsS "http://127.0.0.1:${LLM_PORT}/_received/all?reset=1" >/dev/null 2>&1 || true
-curl -fsS -X POST "$GW1/v1/embeddings" \
+curl --max-time 30 -fsS "http://127.0.0.1:${LLM_PORT}/_received/all?reset=1" >/dev/null 2>&1 || true
+curl --max-time 30 -fsS -X POST "$GW1/v1/embeddings" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"model":"text-embedding-3-small","input":"联系人 13800138000"}' > /dev/null 2>&1 || true
@@ -344,7 +344,7 @@ GW2_PID=$!
 # pii-engineer 走 sidecar 模式，go client 调 mock-detector 等 sleep 3s 后才回，
 # 所以 healthz 健康检查会跟随 sidecar 一起慢（但 healthz 不查 detector，应该秒回）。
 for i in $(seq 1 60); do
-  if curl -fsS -H "Authorization: Bearer $TOKEN" "$GW2/healthz" >/dev/null 2>&1; then
+  if curl --max-time 30 -fsS -H "Authorization: Bearer $TOKEN" "$GW2/healthz" >/dev/null 2>&1; then
     break
   fi
   sleep 0.5
@@ -354,7 +354,7 @@ done
 echo
 echo "[E5] detector sleep 3s: should respond 502 within ~3s, no raw PII echo"
 T_E5_START=$(date +%s)
-E5_BODY=$(curl -s -o /tmp/e2e-e5.body -w "%{http_code}" -X POST "$GW2/v1/chat/completions" \
+E5_BODY=$(curl --max-time 30 -s -o /tmp/e2e-e5.body -w "%{http_code}" -X POST "$GW2/v1/chat/completions" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"model":"mock-1","messages":[{"role":"user","content":"13800138000"}]}')

@@ -1,0 +1,66 @@
+name: release
+
+# 触发：推 v*.*.* tag → 跨平台编译 → 创建 GitHub Release + 上传产物
+# 不动 ci.yml（CI 与 release 解耦）
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'tag to release (e.g. v0.1.0). Empty = use current HEAD ref.'
+        required: false
+        default: ''
+
+permissions:
+  contents: write   # 写 release
+
+env:
+  GO_VERSION: '1.24'
+  GOPROXY: https://goproxy.cn,direct
+  GOSUMDB: sum.golang.google.cn
+  CGO_ENABLED: '0'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: 跨平台编译
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          [[ "$TAG" == "main" || -z "$TAG" ]] && TAG="dev"
+          mkdir -p dist
+          for t in "linux amd64" "linux arm64" "darwin amd64" "darwin arm64" "windows amd64 .exe"; do
+            read goos goarch ext <<<"$t"
+            out="dist/llmate-gate-${goos}-${goarch}${ext}"
+            echo "==> ${goos}/${goarch}"
+            GOOS="$goos" GOARCH="$goarch" go build -trimpath \
+              -ldflags "-s -w -X main.version=$TAG" \
+              -o "$out" ./gateway/cmd/llmate-gate
+          done
+          ( cd dist && sha256sum llmate-gate-* > SHA256SUMS )
+          cat dist/SHA256SUMS
+
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: LLMate Gate ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/llmate-gate-linux-amd64
+            dist/llmate-gate-linux-arm64
+            dist/llmate-gate-darwin-amd64
+            dist/llmate-gate-darwin-arm64
+            dist/llmate-gate-windows-amd64.exe
+            dist/SHA256SUMS
+          fail_on_unmatched_files: true

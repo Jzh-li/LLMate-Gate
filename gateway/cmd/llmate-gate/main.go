@@ -31,6 +31,10 @@ import (
 	"gateway/internal/vault"
 )
 
+// version 由 release.sh 通过 -ldflags "-X main.version=$VERSION" 注入。
+// 留默认 "dev" 以便 go run / 开发构建不出错。
+var version = "dev"
+
 func main() {
 	var (
 		configPath string
@@ -52,7 +56,7 @@ func main() {
 	if listen != "" {
 		cfg.Gateway.Listen = listen
 	}
-	log.Printf("[llmate-gate] %s", cfg.String())
+	log.Printf("[llmate-gate] %s (version=%s)", cfg.String(), version)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

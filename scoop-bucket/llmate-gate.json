@@ -1,0 +1,35 @@
+{
+    "version": "v0.1.0",
+    "description": "LLMate Gate — 中文 PII 脱敏本机网关（OpenAI 兼容反向代理）",
+    "homepage": "https://github.com/Jzh-li/LLMate-Gate",
+    "license": "Apache-2.0",
+    "depends": "",
+    "suggest": {
+        "Lessica-Pickersgill-hear-NOTEPAD": ""
+    },
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/Jzh-li/LLMate-Gate/releases/download/v0.1.0/llmate-gate-windows-amd64.exe",
+            "hash": "f64f7d5d69b65137fc05234cdc1541a95740dca6d6b58cf973efe757ac132b69",
+            "bin": "llmate-gate.exe",
+            "persist": "data"
+        }
+    },
+    "checkver": "github: Jzh-li/LLMate-Gate",
+    "autoupdate": {
+        "url": "https://github.com/Jzh-li/LLMate-Gate/releases/download/$version/llmate-gate-windows-amd64.exe",
+        "hash": {
+            "url": "$url.sha256"
+        },
+        "extract_dir": "",
+        "renames": [
+            ["llmate-gate-windows-amd64.exe", "llmate-gate.exe"]
+        ]
+    },
+    "post_install": [
+        "$dir\\llmate-gate.exe --version"
+    ],
+    "pre_uninstall": [
+        "taskkill /F /IM llmate-gate.exe 2>nul"
+    ]
+}

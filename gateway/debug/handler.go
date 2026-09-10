@@ -8,10 +8,12 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"gateway/internal/audit"
 	"gateway/internal/config"
 	"gateway/internal/detector"
 	"gateway/internal/replacer"
@@ -24,6 +26,11 @@ var assetsFS embed.FS
 // Assets FS 返回内嵌的静态资源（测试可用）。
 func Assets() embed.FS { return assetsFS }
 
+// AuditSource 提供近期审计事件查询（契约 §9，桌面 UI 审计面板数据源）。
+type AuditSource interface {
+	Recent(n int) []audit.Event
+}
+
 // Handler 调试面板路由聚合（契约 §10 / UI设计 §0-4）。
 type Handler struct {
 	hub      *Hub
@@ -34,10 +41,12 @@ type Handler struct {
 	// 规则热加载钩子（外部设置）：PUT /_api/rules 时调用
 	ruleHook func(strategy string) error
 	rulesMu  sync.Mutex
+	// auditSrc 近期审计事件源（nil 时 /_api/audit 返回空）
+	auditSrc AuditSource
 }
 
-// NewHandler 构造 debug Handler；ruleHook 可选（nil 时 /_api/rules 不可用）。
-func NewHandler(cfg *config.Config, det detector.Client, repl replacer.Replacer, hub *Hub, store *TrafficRecordStore, ruleHook func(string) error) *Handler {
+// NewHandler 构造 debug Handler；ruleHook / auditSrc 可选（nil 时对应端点降级）。
+func NewHandler(cfg *config.Config, det detector.Client, repl replacer.Replacer, hub *Hub, store *TrafficRecordStore, ruleHook func(string) error, auditSrc AuditSource) *Handler {
 	return &Handler{
 		hub:      hub,
 		store:    store,
@@ -45,6 +54,7 @@ func NewHandler(cfg *config.Config, det detector.Client, repl replacer.Replacer,
 		det:      det,
 		repl:     repl,
 		ruleHook: ruleHook,
+		auditSrc: auditSrc,
 	}
 }
 
@@ -68,6 +78,7 @@ func (h *Handler) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/_api/detect", h.handleDetect)
 	mux.HandleFunc("/_api/replace", h.handleReplace)
 	mux.HandleFunc("/_api/rules", h.handleRules)
+	mux.HandleFunc("/_api/audit", h.handleAudit)
 }
 
 // ---------- handlers ----------
@@ -364,6 +375,35 @@ func (h *Handler) handleRules(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Allow", "GET, PUT")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// handleAudit GET /_api/audit 返回近期审计事件（最新在前）。
+//
+// 查询参数：?limit=N（默认 50，最大 500）。审计关闭（auditSrc=nil 或 disabled）时返回空数组。
+// 数据源为 audit.Logger 的内存环形缓冲（契约 §9，桌面 UI 审计面板据此渲染）。
+func (h *Handler) handleAudit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	limit := 50
+	if s := r.URL.Query().Get("limit"); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v > 0 {
+			limit = v
+		}
+	}
+	events := []audit.Event{}
+	if h.auditSrc != nil {
+		if got := h.auditSrc.Recent(limit); got != nil {
+			events = got
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"events": events,
+		"count":  len(events),
+	})
 }
 
 // ---------- helpers ----------

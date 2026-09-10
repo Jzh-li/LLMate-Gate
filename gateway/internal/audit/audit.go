@@ -50,12 +50,17 @@ type Logger struct {
 	writer   *bufio.Writer
 	logPII   bool
 	disabled bool
+
+	// ring 内存环形缓冲：保存最近 ringCap 条事件，供 /_api/audit 查询
+	// （桌面 UI 审计面板数据源）。仅当 !disabled 时填充。
+	ring    []Event
+	ringCap int
 }
 
 // NewLogger 构造审计 logger。
 // path 为空或 enabled=false 时仅丢弃（不报错），保证代理可独立运行。
 func NewLogger(path string, enabled, logPII bool) (*Logger, error) {
-	l := &Logger{logPII: logPII}
+	l := &Logger{logPII: logPII, ringCap: 200, ring: make([]Event, 0, 200)}
 	if !enabled {
 		l.disabled = true
 		return l, nil
@@ -90,7 +95,44 @@ func (l *Logger) Write(e *Event) error {
 	if _, err := l.writer.Write(append(b, '\n')); err != nil {
 		return err
 	}
-	return l.writer.Flush()
+	if err := l.writer.Flush(); err != nil {
+		return err
+	}
+	// 内存环形缓冲：供 /_api/audit 查询近期事件（桌面 UI 审计面板数据源）
+	l.ring = append(l.ring, *e)
+	if len(l.ring) > l.ringCap {
+		l.ring = l.ring[len(l.ring)-l.ringCap:]
+	}
+	return nil
+}
+
+// Recent 返回最近 n 条审计事件（最新在前），供查询端点使用。
+// disabled（audit 关闭）时返回 nil。
+func (l *Logger) Recent(n int) []Event {
+	if l == nil || l.disabled {
+		return nil
+	}
+	if n <= 0 {
+		n = 50
+	}
+	if n > 500 {
+		n = 500
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	total := len(l.ring)
+	if n > total {
+		n = total
+	}
+	out := make([]Event, 0, n)
+	for i := total - n; i < total; i++ {
+		out = append(out, l.ring[i])
+	}
+	// 翻转为最新在前
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out
 }
 
 // Close 刷新并关闭文件。

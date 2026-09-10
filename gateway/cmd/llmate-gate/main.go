@@ -202,7 +202,7 @@ func main() {
 	if cfg.Gateway.Debug {
 		dh := debug.NewHandler(cfg, guarded, repl, debugHub, debugStore, func(strategy string) error {
 			return repl.SetStrategy(strategy)
-		})
+		}, alog)
 		dh.Mount(srv.Mux())
 		log.Printf("[llmate-gate] debug panel mounted at %s/_debug", cfg.Gateway.Listen)
 	} else {

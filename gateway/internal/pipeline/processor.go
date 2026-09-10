@@ -237,6 +237,13 @@ func (p *Processor) Strategy() string {
 	return p.repl.Strategy()
 }
 
+// RecordAudit 记录一条审计事件（契约 §9）；audit 为 nil 时安全跳过。
+func (p *Processor) RecordAudit(e *audit.Event) {
+	if p.audit != nil {
+		_ = p.audit.Write(e)
+	}
+}
+
 // classifyDetectErr 把检测错误映射为统一的阻断错误码（契约 §0.3）。
 func classifyDetectErr(err error) error {
 	if err == nil {

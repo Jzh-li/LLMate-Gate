@@ -17,6 +17,7 @@ import (
 	"time"
 
 	gatewayerrors "gateway/internal/errors"
+	"gateway/internal/audit"
 	"gateway/internal/cache"
 	"gateway/internal/metrics"
 	"gateway/internal/pipeline"
@@ -76,6 +77,12 @@ func (p *Proxy) Handle(w http.ResponseWriter, r *http.Request, endpoint string, 
 		rawRequest = redactLog(rawRequest)
 	}
 
+	// 提取 model 字段（非 PII），用于审计事件
+	var meta struct {
+		Model string `json:"model"`
+	}
+	_ = json.Unmarshal(body, &meta)
+
 	// 早发布：request.received（含原始请求 + method/stream/started_at）；
 	// Hub.Store 按 RequestID 合并，后续事件会填充其它字段。
 	p.publish(pipeline.EvRequestReceived, &pipeline.TrafficEvent{
@@ -94,6 +101,7 @@ func (p *Proxy) Handle(w http.ResponseWriter, r *http.Request, endpoint string, 
 			RequestID: reqID, Endpoint: endpoint, RawRequest: rawRequest,
 			Strategy: p.strategy(), Outcome: "blocked", Error: aerr.Error(), Timestamp: time.Now(),
 		})
+		p.recordAudit(reqID, convID, endpoint, meta.Model, stream, nil, "blocked", errorCode(aerr), start)
 		writeError(w, aerr)
 		return
 	}
@@ -113,7 +121,7 @@ func (p *Proxy) Handle(w http.ResponseWriter, r *http.Request, endpoint string, 
 		return
 	}
 
-	p.forward(w, r, endpoint, stream, reqID, convID, newBody, rawRequest, entries, start)
+	p.forward(w, r, endpoint, stream, reqID, convID, meta.Model, newBody, rawRequest, entries, start)
 }
 
 // anonymizeBody 解析 JSON 请求体并脱敏 PII 字段，返回脱敏后 body 与映射条目。
@@ -297,7 +305,7 @@ func anonymizeJSONString(v interface{}, anon func(string) (string, error)) (inte
 }
 
 // forward 转发上游并还原响应。
-func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, endpoint string, stream bool, reqID, convID string, newBody []byte, rawRequest string, entries []types.MappingEntry, start time.Time) {
+func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, endpoint string, stream bool, reqID, convID, model string, newBody []byte, rawRequest string, entries []types.MappingEntry, start time.Time) {
 	dest := p.upstreamFor(r.URL.Path)
 	upReq, err := http.NewRequestWithContext(r.Context(), r.Method, dest, bytes.NewReader(newBody))
 	if err != nil {
@@ -327,14 +335,14 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, endpoint string,
 	restorer := replacer.NewStreamRestorerFromEntries(entries)
 
 	if stream {
-		p.streamResponse(w, resp, endpoint, reqID, convID, rawRequest, entries, restorer, start)
+		p.streamResponse(w, resp, endpoint, reqID, convID, model, rawRequest, entries, restorer, start)
 		return
 	}
-	p.fullResponse(w, resp, endpoint, reqID, convID, rawRequest, entries, restorer, start)
+	p.fullResponse(w, resp, endpoint, reqID, convID, model, rawRequest, entries, restorer, start)
 }
 
 // fullResponse 非流式：整包还原后返回。
-func (p *Proxy) fullResponse(w http.ResponseWriter, resp *http.Response, endpoint, reqID, convID, rawRequest string, entries []types.MappingEntry, restorer *replacer.StreamRestorer, start time.Time) {
+func (p *Proxy) fullResponse(w http.ResponseWriter, resp *http.Response, endpoint, reqID, convID, model, rawRequest string, entries []types.MappingEntry, restorer *replacer.StreamRestorer, start time.Time) {
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		writeError(w, gatewayerrors.Wrap(gatewayerrors.CodeUpstreamError, "read upstream", err))
@@ -370,10 +378,11 @@ func (p *Proxy) fullResponse(w http.ResponseWriter, resp *http.Response, endpoin
 		DurationMs: now.Sub(start).Milliseconds(),
 		Timestamp: now,
 	})
+	p.recordAudit(reqID, convID, endpoint, model, false, entries, outcomeOf(resp.StatusCode), "", start)
 }
 
 // streamResponse SSE 流式：逐块还原并 flush。
-func (p *Proxy) streamResponse(w http.ResponseWriter, resp *http.Response, endpoint, reqID, convID, rawRequest string, entries []types.MappingEntry, restorer *replacer.StreamRestorer, start time.Time) {
+func (p *Proxy) streamResponse(w http.ResponseWriter, resp *http.Response, endpoint, reqID, convID, model, rawRequest string, entries []types.MappingEntry, restorer *replacer.StreamRestorer, start time.Time) {
 	if p.m != nil {
 		p.m.ActiveConns.Inc()
 		defer p.m.ActiveConns.Dec()
@@ -442,6 +451,7 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, resp *http.Response, endpo
 		DurationMs: now.Sub(start).Milliseconds(),
 		Timestamp: now,
 	})
+	p.recordAudit(reqID, convID, endpoint, model, true, entries, outcomeOf(resp.StatusCode), "", start)
 }
 
 // ---- 工具函数 ----
@@ -473,6 +483,46 @@ func (p *Proxy) setUpstreamAuth(req *http.Request) {
 func (p *Proxy) strategy() string { return p.proc.Strategy() }
 
 func (p *Proxy) publish(ev string, data interface{}) { p.proc.Publish(ev, data) }
+
+// recordAudit 在请求收尾处记录一条结构化审计事件（契约 §9）。
+// outcome 由调用方按响应状态给出（success/blocked/error）；entries 为本次映射条目。
+func (p *Proxy) recordAudit(reqID, convID, endpoint, model string, stream bool, entries []types.MappingEntry, outcome, errorCode string, start time.Time) {
+	if p.proc == nil {
+		return
+	}
+	e := &audit.Event{
+		Timestamp:        time.Now(),
+		RequestID:        reqID,
+		ConversationID:   convID,
+		Upstream:         p.upstream.Host,
+		Model:            model,
+		DetectedEntities: toAuditSummary(entitiesFromEntries(entries), p.logPII),
+		ReplacedCount:    len(entries),
+		Strategy:         p.strategy(),
+		Restored:         true,
+		Streaming:        stream,
+		LatencyMs:        time.Since(start).Milliseconds(),
+		Outcome:          outcome,
+		ErrorCode:        errorCode,
+	}
+	p.proc.RecordAudit(e)
+}
+
+// toAuditSummary 把检测实体转审计摘要；仅当 logPII=true 才携带原文（契约 §9.2）。
+func toAuditSummary(entities []types.Entity, logPII bool) []audit.EntitySummary {
+	if len(entities) == 0 {
+		return nil
+	}
+	out := make([]audit.EntitySummary, 0, len(entities))
+	for _, e := range entities {
+		s := audit.EntitySummary{Type: e.Type, Score: e.Score}
+		if logPII {
+			s.Value = e.Value
+		}
+		out = append(out, s)
+	}
+	return out
+}
 
 func copyHeaders(dst, src http.Header) {
 	for k, vals := range src {

@@ -41,6 +41,12 @@ var (
 	reEmail    = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)
 	reIPv4     = regexp.MustCompile(`(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])`)
 	reDate     = regexp.MustCompile(`(?:19|20)[0-9]{2}[-/.年](?:0?[1-9]|1[0-2])[-/.月](?:0?[1-9]|[12][0-9]|3[01])日?`)
+	// ⚠️ 冲突标注（2026-09-10，待裁决，见 SPEC_ALIGNMENT.md C12d / Q12）：
+	// rePlate 已定义但**未接线**——pkg/types 没有对应实体类型常量，车牌不会出现在检测输出中。
+	// 而 README「支持的实体类型」表把"车牌"列为已支持，与实现不符。
+	// 方案利弊：① 接线（新增 zh_plate 类型）——扩检测面，但需补 ground truth 语料并重跑 bench；
+	//          ② 维持未接线 + 从 README 移除——文档诚实，但对外承诺缩小。
+	// 当前未改动检测行为（新增实体类型属功能变更，需人工裁决）。
 	rePlate    = regexp.MustCompile(`[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-HJ-NP-Z0-9]{4,6}`)
 	reAPIKey   = regexp.MustCompile(`\b(?:sk|pk|api|ak)-[A-Za-z0-9_\-]{16,}`)
 	reJWT      = regexp.MustCompile(`\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}`)

@@ -348,7 +348,9 @@ LLMate Gate 的审计日志是结构化的，每条记录包含：
 
 ## 📜 License
 
-Apache License 2.0（LICENSE 文件尚未添加）
+Apache License 2.0 — see [LICENSE](./LICENSE) for the full text.
+
+Copyright 2026 LLMate Gate Contributors
 
 ## 🤝 贡献
 

@@ -1,0 +1,313 @@
+// privacy_test.go —— 常驻隐私端点（/v1/privacy/redact）与不透明 block 跳过
+// （block allowlist）的单测。覆盖 §8.2「架构对齐 · Block allowlist」。
+package proxy
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"gateway/internal/detector"
+	"gateway/internal/pipeline"
+	"gateway/internal/replacer"
+	"gateway/internal/simulator"
+	"gateway/internal/vault"
+)
+
+// newPrivacyTestProxy 构造一个最小可用的 *Proxy，仅供 redactValue / restoreValue 单测。
+// 不启 HTTP 服务、不挂路由——只复用其内部组件。
+func newPrivacyTestProxy(t *testing.T) *Proxy {
+	t.Helper()
+	v, err := vault.NewMemVault(testTTL, []byte("unit-test-passphrase"), false, "")
+	require.NoError(t, err)
+	det := detector.NewRegexEngine()
+	repl := replacer.New(replacer.Config{
+		Strategy:   "placeholder",
+		Simulate:   simulator.SimulateZHConfig{},
+		SessionKey: []byte("session-key-32-bytes-long!!!"),
+	}, v)
+	proc := pipeline.New(pipeline.Config{Detector: det, Replacer: repl, Vault: v, FailClosed: true})
+	return &Proxy{proc: proc}
+}
+
+// TestShouldSkipValue 覆盖三类不透明子树判定。
+func TestShouldSkipValue(t *testing.T) {
+	t.Run("byType: 整 subtree 是 thinking 块", func(t *testing.T) {
+		v := map[string]interface{}{"type": "thinking", "thinking": "用户手机 13800138000"}
+		require.True(t, shouldSkipValue("", v))
+	})
+	t.Run("byKey: data 字段是 base64", func(t *testing.T) {
+		v := "iVBORw0KGgoAAAANSUhEUgAA..."
+		require.True(t, shouldSkipValue("data", v))
+	})
+	t.Run("byPrefix: data URL 字符串", func(t *testing.T) {
+		v := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA..."
+		require.True(t, shouldSkipValue("", v))
+	})
+	t.Run("负面: 普通 PII 文本不应跳过", func(t *testing.T) {
+		v := "我的手机 13800138000"
+		require.False(t, shouldSkipValue("", v))
+	})
+	t.Run("负面: 普通 dict 不应跳过", func(t *testing.T) {
+		v := map[string]interface{}{"role": "user", "content": "电话 13800138000"}
+		require.False(t, shouldSkipValue("", v))
+	})
+	t.Run("负面: image_url 是 dict（非字符串）也不命中 byPrefix", func(t *testing.T) {
+		v := map[string]interface{}{"url": "data:image/png;base64,xxx"}
+		// map 本身不命中 byType（无 type 字段），内部走递归命中 image_url 键
+		require.False(t, shouldSkipValue("", v))
+	})
+}
+
+// TestRedactValue_OpBlocks cover:
+//  1. base64 字符串（data 字段）原样返回
+//  2. thinking 块整 subtree 原样返回（即使内部含 PII 也不脱敏）
+//  3. image data URL 原样返回
+//  4. 普通文本里的 PII 仍被脱敏
+//  5. 通透结构（content 字段）仍递归脱敏
+func TestRedactValue_OpBlocks(t *testing.T) {
+	px := newPrivacyTestProxy(t)
+	ctx := context.Background()
+	sess := px.proc.NewSession()
+	convID := ""
+
+	// Case 1: 顶层 data 字段（base64）
+	t.Run("data 字段 base64 跳过", func(t *testing.T) {
+		in := map[string]interface{}{
+			"data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+		}
+		out, err := px.redactValue(ctx, sess, convID, in)
+		require.NoError(t, err)
+		got, _ := json.Marshal(out)
+		// 整段未变（不进 redactText，无占位符被写入）
+		require.Equal(t, json.RawMessage(got), json.RawMessage(mustMarshal(t, in)))
+	})
+
+	// Case 2: thinking 整块不脱敏（即使 thinking 字段内含 PII 也不动）
+	t.Run("thinking 整块不脱敏", func(t *testing.T) {
+		in := map[string]interface{}{
+			"type":     "thinking",
+			"thinking": "用户提到 13800138000，这是 PII。",
+		}
+		out, err := px.redactValue(ctx, sess, convID, in)
+		require.NoError(t, err)
+		got, _ := json.Marshal(out)
+		require.Equal(t, json.RawMessage(got), json.RawMessage(mustMarshal(t, in)))
+	})
+
+	// Case 3: image data URL 字符串（原样）
+	t.Run("data URL 字符串原样", func(t *testing.T) {
+		in := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA"
+		out, err := px.redactValue(ctx, sess, convID, in)
+		require.NoError(t, err)
+		require.Equal(t, in, out)
+	})
+
+	// Case 4: 普通 PII 仍被脱敏
+	t.Run("普通 PII 文本脱敏", func(t *testing.T) {
+		in := "我的手机 13800138000"
+		out, err := px.redactValue(ctx, sess, convID, in)
+		require.NoError(t, err)
+		s, _ := out.(string)
+		require.NotEqual(t, in, s)
+		require.NotContains(t, s, "13800138000")
+	})
+
+	// Case 5: 通透字段 content 仍递归脱敏
+	t.Run("content 字段递归脱敏", func(t *testing.T) {
+		in := map[string]interface{}{
+			"role":    "user",
+			"content": "联系张三，手机 13800138000",
+		}
+		out, err := px.redactValue(ctx, sess, convID, in)
+		require.NoError(t, err)
+		m := out.(map[string]interface{})
+		// 键保留
+		require.Equal(t, "user", m["role"])
+		// 值脱敏
+		s, _ := m["content"].(string)
+		require.NotContains(t, s, "13800138000")
+	})
+
+	// Case 6: mcp_list_tools 块整 subtree 不动
+	t.Run("mcp_list_tools 块不动", func(t *testing.T) {
+		in := map[string]interface{}{
+			"type":   "mcp_list_tools",
+			"server": "github",
+			"tools":  []interface{}{"create_issue", "list_repos"},
+		}
+		out, err := px.redactValue(ctx, sess, convID, in)
+		require.NoError(t, err)
+		got, _ := json.Marshal(out)
+		require.Equal(t, json.RawMessage(got), json.RawMessage(mustMarshal(t, in)))
+	})
+
+	// Case 7: 嵌套 — OpenAI chat 多模态 content 数组里 image_url 跳过
+	t.Run("多模态 content 数组里 image_url 跳过", func(t *testing.T) {
+		in := map[string]interface{}{
+			"role": "user",
+			"content": []interface{}{
+				map[string]interface{}{"type": "text", "text": "请描述这张图"},
+				map[string]interface{}{
+					"type":     "image_url",
+					"image_url": map[string]interface{}{
+						"url": "data:image/png;base64,abc",
+					},
+				},
+			},
+		}
+		out, err := px.redactValue(ctx, sess, convID, in)
+		require.NoError(t, err)
+		m := out.(map[string]interface{})
+		arr := m["content"].([]interface{})
+		// 第一个 part（text）原样保留（"请描述这张图" 无 PII）
+		first := arr[0].(map[string]interface{})
+		require.Equal(t, "请描述这张图", first["text"])
+		// 第二个 part（image_url）原样保留
+		second := arr[1].(map[string]interface{})
+		require.Equal(t, "image_url", second["type"])
+		// 内层 image_url.url 仍是 data URL 字符串，未被改
+		inner := second["image_url"].(map[string]interface{})
+		require.Equal(t, "data:image/png;base64,abc", inner["url"])
+	})
+}
+
+// TestRedactValue_RegFunc 测试 /v1/privacy/redact 端点的脱敏功能。
+// 注意：privacy.redactValue 走无差别脱敏（任意 string 都扫）——与 proxy.transform
+// 按 PII 字段表的精细脱敏不同。这里测的是端点行为。
+func TestRedactValue_RegFunc(t *testing.T) {
+	px := newPrivacyTestProxy(t)
+	ctx := context.Background()
+	sess := px.proc.NewSession()
+	convID := ""
+
+	in := map[string]interface{}{
+		"content":  "联系张三，手机 13800138000",
+		"role":     "user",
+		"api_key":  "sk-1234567890abcdef",
+		"messages": []interface{}{
+			map[string]interface{}{"content": "邮箱 zhangsan@example.com"},
+		},
+	}
+	out, err := px.redactValue(ctx, sess, convID, in)
+	require.NoError(t, err)
+	m := out.(map[string]interface{})
+	// 键保留
+	require.Contains(t, m, "content")
+	require.Contains(t, m, "role")
+	require.Contains(t, m, "api_key")
+	require.Contains(t, m, "messages")
+	// content 字段被脱敏（zh_person_name + zh_phone 都被识别）
+	cs, _ := m["content"].(string)
+	require.NotEqual(t, "联系张三，手机 13800138000", cs)
+	require.NotContains(t, cs, "13800138000")
+	// 嵌套 content 字段（list of messages）也脱敏
+	msgs := m["messages"].([]interface{})
+	firstMsg := msgs[0].(map[string]interface{})
+	firstContent, _ := firstMsg["content"].(string)
+	require.NotContains(t, firstContent, "zhangsan@example.com")
+	// api_key 走不可逆 redact（privacy.go 走无差别脱敏，所有 string 都进检测器）
+	require.Equal(t, "[REDACTED]", m["api_key"])
+}
+
+func mustMarshal(t *testing.T, v interface{}) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	require.NoError(t, err)
+	return b
+}
+
+// TestPrivacyRedact_GateOnly 通过 HTTP 路径测 gate_only=true 模式：
+// 入参是含 PII 的 JSON/text，返回 has_pii + entities，原文应原样保留。
+func TestPrivacyRedact_GateOnly(t *testing.T) {
+	t.Run("text 模式：返回 has_pii=true，原文保留", func(t *testing.T) {
+		px := newPrivacyTestProxy(t)
+		req := newReqJSON("POST", "/v1/privacy/redact", `{
+			"text": "联系张三，手机 13800138000",
+			"gate_only": true
+		}`)
+		rec := httptest.NewRecorder()
+		px.PrivacyRedact(rec, req)
+		require.Equal(t, 200, rec.Code)
+
+		var resp struct {
+			Text     string  `json:"text"`
+			HasPII   bool    `json:"has_pii"`
+			Entities []struct {
+				Type  string  `json:"type"`
+				Value string  `json:"value"`
+				Score float64 `json:"score"`
+			} `json:"entities"`
+			Blocked  bool   `json:"blocked"`
+			Changed  bool   `json:"changed"`
+			RequestID string `json:"request_id"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+		require.True(t, resp.HasPII)
+		require.NotEmpty(t, resp.Entities)
+		require.True(t, resp.Blocked) // 默认 block_types 为空 = 命中即 block
+		require.False(t, resp.Changed)
+		require.Equal(t, "", resp.RequestID) // gate_only 不创建 request_id
+		require.Equal(t, "联系张三，手机 13800138000", resp.Text) // 原文原样
+	})
+
+	// 注：JSON 嵌套模式（req.json 字段作为嵌套 JSON object）暂未实现，
+	// 当前 gate_only 的 json 字段按 string 接收。text 模式已覆盖 gate_only 核心语义：
+	// 1) has_pii=true / entities 准确；2) 原文不改写。
+	// 见 .workbuddy/TODO_QUEUE.md「T2 后续：嵌套 JSON 解析」。
+
+	t.Run("block_types 过滤：未在列表的实体不触发 block", func(t *testing.T) {
+		px := newPrivacyTestProxy(t)
+		req := newReqJSON("POST", "/v1/privacy/redact", `{
+			"text": "联系张三，手机 13800138000",
+			"gate_only": true,
+			"block_types": ["api_key"]
+		}`)
+		rec := httptest.NewRecorder()
+		px.PrivacyRedact(rec, req)
+		require.Equal(t, 200, rec.Code)
+
+		var resp struct {
+			HasPII  bool `json:"has_pii"`
+			Blocked bool `json:"blocked"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+		require.True(t, resp.HasPII)
+		require.False(t, resp.Blocked) // 命中 phone/person 但 block_types 仅 api_key → 不 block
+	})
+
+	t.Run("无 PII 文本：has_pii=false", func(t *testing.T) {
+		px := newPrivacyTestProxy(t)
+		req := newReqJSON("POST", "/v1/privacy/redact", `{
+			"text": "今天天气真好",
+			"gate_only": true
+		}`)
+		rec := httptest.NewRecorder()
+		px.PrivacyRedact(rec, req)
+		require.Equal(t, 200, rec.Code)
+
+		var resp struct {
+			HasPII   bool `json:"has_pii"`
+			Blocked  bool `json:"blocked"`
+			Entities []any `json:"entities"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+		require.False(t, resp.HasPII)
+		require.False(t, resp.Blocked)
+	})
+}
+
+func newReqJSON(method, target, body string) *http.Request {
+	r := httptest.NewRequest(method, target, strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	return r
+}
+
+// 防止 go vet 报 "imported and not used: time"
+var _ = time.Second

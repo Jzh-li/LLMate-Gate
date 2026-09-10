@@ -51,13 +51,47 @@ func New(proc *pipeline.Processor, upstream *url.URL, upstreamAPIKey, upstreamVe
 	}
 }
 
-// piiFieldKeys 请求体里需要脱敏的字符串字段（契约 §4.1）。
+// piiFieldKeys 请求体里需要脱敏的字符串字段（契约 §4.1 + 协议级补完 2026-09-11）。
+//
+// "input" 同时承担：Anthropic tool_use.input、OpenAI chat tool_calls arguments
+// 解析后的根（经 anonymizeJSONString 强制 inPII=true 注入）。
+// "instructions" / "output_text" 是 OpenAI Responses API 字段（T12 启用）。
+// name 不入表：键名不该脱敏。
 var piiFieldKeys = map[string]bool{
-	"content": true,
-	"text":    true,
-	"input":   true,
-	"prompt":  true,
-	"system":  true,
+	"content":      true,
+	"text":         true,
+	"input":        true,
+	"prompt":       true,
+	"system":       true,
+	"instructions": true, // OpenAI Responses 的 agent 提示
+	"output_text":  true, // OpenAI Responses 输出文本
+}
+
+// piiBlockTypes block 根 type 字段命中 → 强制进入 PII 上下文（解决 T3 真实问题：
+// Anthropic tool_use.input 在 content 列表里嵌着 dict，type 字段不是 PII 字段名，
+// 但其下 input 字段全是要脱敏的用户数据；同理 tool_result / function_call /
+// function_call_output / message 等结构化 block）。
+//
+// 这些都是「容器型 block」，里面 value 都该被脱敏。
+var piiBlockTypes = map[string]bool{
+	"tool_use":              true, // Anthropic Messages
+	"tool_result":           true, // Anthropic Messages
+	"server_tool_use":       true, // Anthropic WebSearch / WebFetch 等内置工具
+	"mcp_tool_use":          true, // Anthropic MCP 工具
+	"mcp_tool_result":       true,
+	"function_call":         true, // OpenAI Responses
+	"function_call_output":  true,
+	"custom_tool_call":      true, // OpenAI Responses
+	"custom_tool_call_output": true,
+	"computer_call":         true, // OpenAI Responses（含 action 字典）
+	"local_shell_call":      true,
+	"shell_call":            true,
+	"web_search_call":       true, // action 内含 query 字符串
+	"apply_patch_call":      true,
+	"file_search_call":      true,
+	"code_interpreter_call": true,
+	"program":               true,
+	"message":               true, // OpenAI Responses bare text message
 }
 
 // Handle 通用转发入口；anon 决定如何脱敏请求体。
@@ -243,13 +277,36 @@ func extractMessageContents(doc interface{}) ([]string, bool) {
 }
 
 // transform 递归遍历 JSON，仅对 PII 字段内的字符串脱敏。错误必须上抛（fail-closed 关键）。
+//
+// PII 上下文进入规则（任一即触发 childPII=true）：
+//   1. 父层已在 PII 上下文（inPII=true 透传）
+//   2. 当前 key 在 piiFieldKeys（content / text / input / system ...）
+//   3. 当前 map 的 type 字段命中 piiBlockTypes（tool_use / tool_result /
+//      function_call ... → 整块结构是「容器型 PII block」）
+//
+// 不透明 block 跳过（shouldSkipValue）：
+//   - type 字段命中 opaqueBlockTypes（thinking / base64 块 / encrypted_content）
+//   - 父 key 命中 opaqueValueKeys（data / signature / encrypted_content）
+//   - string 值以 dataURLPrefixes 开头（base64 data URL）
+// 命中任一即原样返回，不进 anon。
 func transform(v interface{}, inPII bool, anon func(string) (string, error)) (interface{}, error) {
 	switch x := v.(type) {
 	case map[string]interface{}:
+		// 整 map 是不透明 block：原样返回
+		if shouldSkipValue("", x) {
+			return x, nil
+		}
 		out := make(map[string]interface{}, len(x))
+		// 检测容器型 PII block：type 字段命中 piiBlockTypes → 整块进 PII 上下文
+		blockIsPII := inPII
+		if t, _ := x["type"].(string); t != "" {
+			if piiBlockTypes[t] {
+				blockIsPII = true
+			}
+		}
 		for k, val := range x {
+			// arguments 走 JSON 解析（OpenAI tool_calls.function.arguments）
 			if k == "arguments" {
-				// OpenAI tool_calls.function.arguments：JSON 字符串，整体当 PII
 				r, e := anonymizeJSONString(val, anon)
 				if e != nil {
 					return nil, e
@@ -257,7 +314,12 @@ func transform(v interface{}, inPII bool, anon func(string) (string, error)) (in
 				out[k] = r
 				continue
 			}
-			childPII := inPII || piiFieldKeys[k]
+			// 不透明 value（base64 data / signature / encrypted_content 等）：原样保留
+			if shouldSkipValue(k, val) {
+				out[k] = val
+				continue
+			}
+			childPII := blockIsPII || piiFieldKeys[k]
 			r, e := transform(val, childPII, anon)
 			if e != nil {
 				return nil, e
@@ -276,6 +338,9 @@ func transform(v interface{}, inPII bool, anon func(string) (string, error)) (in
 		}
 		return out, nil
 	case string:
+		if shouldSkipValue("", x) {
+			return x, nil
+		}
 		if inPII {
 			return anon(x)
 		}

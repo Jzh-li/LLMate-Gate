@@ -14,6 +14,15 @@ env:
   GO_VERSION: '1.24'
   GOPROXY: https://proxy.golang.org,direct
 
+# ⚠️ 冲突标注（2026-09-10，待裁决，见 SPEC_ALIGNMENT.md C13 / Q11）：
+# 本流水线只覆盖 vet + go test + e2e + ui_smoke + bench 守门；与 Specs/03-测试规约.md §7.2 相比缺少：
+#   - Lint（golangci-lint）、-race、govulncheck
+#   - 覆盖率门槛判定（coverage job 只上传 artifact，不阻断；spec §5 要求逐包/整体门槛）
+#   - go test -bench 与 bench/baseline.txt 的性能回退（>10%）检测
+# 方案①：补齐门禁 —— 符合 spec，但会新增失败面；刚修复完的流水线有再次变红的风险，且覆盖率需先建立基线。
+# 方案②：维持现状 + 回写 spec —— 零风险，但放弃了护栏（覆盖率/性能回退无人把门）。
+# 当前未改动流水线行为（改动 CI 属可能影响现有功能，需人工裁决）。
+
 jobs:
   verify:
     name: vet & unit test

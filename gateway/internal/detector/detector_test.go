@@ -174,3 +174,40 @@ func TestRegexEngine_Secrets(t *testing.T) {
 	}
 	require.True(t, sawSecret, "凭证应被识别为不可逆实体")
 }
+
+// TestRegexEngine_AddressAllForms 覆盖省/直辖市/自治区三类地址形式。
+// 回归用：先前正则只认 X省，漏掉 4 直辖市（baseline recall 0.67）。
+func TestRegexEngine_AddressAllForms(t *testing.T) {
+	cases := []struct {
+		name   string
+		text   string
+		expect string
+	}{
+		// 省级（已有覆盖，确保回归）
+		{"province_with_district", "收件地址：浙江省南京市文三路261号", "浙江省南京市文三路261号"},
+		{"province_no_district", "收件地址：广东省深圳市南京西路26号", "广东省深圳市南京西路26号"},
+		// 直辖市（新增覆盖）
+		{"direct_city_beijing", "收件地址：北京市海淀区科技园路207号", "北京市海淀区科技园路207号"},
+		{"direct_city_shanghai", "收件地址：上海市海淀区中关村大街65号", "上海市海淀区中关村大街65号"},
+		{"direct_city_tianjin", "办公地址：天津市南开区卫津路100号", "天津市南开区卫津路100号"},
+		{"direct_city_chongqing", "重庆市渝中区中山四路36号", "重庆市渝中区中山四路36号"},
+		// 自治区（与省份走同一分支，确保未回归）
+		{"autonomous_region", "地址：内蒙古自治区呼和浩特市新华大街50号", "内蒙古自治区呼和浩特市新华大街50号"},
+	}
+	e := NewRegexEngine()
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := e.Detect(context.Background(), &types.DetectRequest{Text: tc.text})
+			require.NoError(t, err)
+			var saw bool
+			for _, ent := range resp.Entities {
+				if ent.Type == types.EntityAddress && ent.Value == tc.expect {
+					saw = true
+					break
+				}
+			}
+			require.True(t, saw, "expected address %q in %q, got entities=%+v", tc.expect, tc.text, resp.Entities)
+		})
+	}
+}

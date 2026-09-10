@@ -257,6 +257,11 @@ else
   assert_re_nomatch '<<email_[0-9]+>>' "$E3_RAW" "E3 stream response has no raw placeholder leak"
 fi
 
+# ⚠️ 冲突标注（2026-09-10，待裁决，见 SPEC_ALIGNMENT.md C16）：
+# 测试规约 §3.2 的 E4 要求「第二次请求走缓存，延迟 < 50ms」；本脚本只断言幂等（两次都脱敏），
+# 未断言延迟。方案①：补延迟断言 —— 与 spec 一致，但 CI 机器上 50ms 阈值不稳，可能引入偶发红。
+# 方案②：维持断言 + 回写 spec 为「幂等即可」—— 稳定，但弱化了缓存验收。
+# 当前未改动断言（改 CI 断言属可能影响流水线，需人工裁决）。
 # ---------- E4: cache 幂等性 ----------
 echo
 echo "[E4] cache: 同 conv 同一 PII 连续两次请求，上游都应收到 placeholder（幂等替换）"

@@ -2,9 +2,9 @@
 
 > 探路者 Loop 的进度追踪（执行手册 §"进度追踪"）。每完成一阶段更新一次。
 
-## 当前阶段：Phase 3 · 任务 3.1（MCP 薄门面）已完成
+## 当前阶段：Phase 4 收口（审计 + cn-pii-bench 已完成，Tauri UI 待启动）
 
-## 当前任务：Phase 3 MCP 门面交付（anonymize / deanonymize / scan_tool_params，stdio 协议，复用网关隐私端点）。下一步：Phase 2 任务 2.3 Tauri 桌面 UI（可选）/ Phase 3 收口
+## 当前任务：Tauri 桌面托盘 UI / PII Engineer 集成（决策待 zh_address 优化方向确定）
 
 ## 状态：执行中
 
@@ -229,3 +229,70 @@ go1.26.8 工具链，破坏当前 Go 1.24 基线（CI pin 1.24.5）。故 **pin 
 | cn-pii-bench 模块化 | 跳转（独立 Python 校验脚本） | WSL 9P 不支持 go mod init 落锁，跳过 Go test；用 Python 直接读 JSONL，等 CI 跑通了再补 Go loader |
 | 3.1 MCP 门面 | 直达（官方 SDK + 调常驻隐私端点） | SDK 一行引入不造协议轮子；经 HTTP 调网关端点才能与反代层共用同一 vault（满足「共享映射表」验收），内嵌核心会映射表分离 |
 | 3.1 MCP SDK 版本 | 跳转（pin v0.37.0 而非 latest） | v1.0.0 要求 Go ≥ 1.25.5 会顶高模块 go 指令并拉新工具链，破坏 Go 1.24 基线 |
+
+---
+
+## 2026-09-10 21:30~21:40 · Phase 4 收口（审计 + cn-pii-bench）
+
+### 完成项
+
+**1. 结构化审计日志（契约 §9）** —— commit `3b97cfb`
+- `gateway/internal/audit`：Logger 加内存环（最近 200 条），新增 `Recent(n)` API
+- `gateway/internal/pipeline/processor.go`：新增 `RecordAudit(e)` 薄封装
+- `gateway/internal/proxy/proxy.go`：blocked / full / stream 三个分支收尾均记录
+  审计事件（req_id / conv_id / upstream / model / detected_entities 摘要 /
+  replaced_count / strategy / restored / streaming / latency_ms / outcome / error_code）
+- `gateway/debug/handler.go`：新增 `GET /_api/audit?limit=N`（默认 50 最大 500）
+- `gateway/cmd/llmate-gate/main.go`：把 `*audit.Logger` 注入 debug handler 作为 auditSrc
+- 新增 `gateway/internal/audit/audit_test.go`：环形缓冲截断 + 禁用态 nil 两条单测
+- 闭环验证：mock-llm + llmate-gate + PII 请求 → `/_api/audit` 返回 1 条事件
+  （含真实 detected_entities、replaced_count、restored、outcome）
+
+**2. 调试面板审计 Tab（§4.3）** —— commit `2ca578e`
+- `gateway/debug/assets/index.html`：新增「审计」Tab + `#auditBody` 渲染容器 + 刷新按钮
+- `gateway/debug/assets/app.js`：`fetchAudit` + `renderAudit` 实现拉取 `/_api/audit`
+  并以表格渲染时间 / 模型 / 上游 / 实体数 / 还原 / 延迟 / 状态
+- 新增 `gateway/configs/smoke.yaml`（不入库，已加 `.gitignore`）：
+  本地端到端冒烟模板（debug=true / audit=true / engine=regex / vault.persist=false）
+- 闭环验证：dev.sh sync → buildall → mock-llm + llmate-gate + curl PII 请求
+  → `/_debug` HTML 含 `data-tab="audit"` / `tab-audit` / `审计` 全部标记
+
+**3. cn-pii-bench 0.4 baseline 评估器** —— commit `d9798b8`
+- `bench/runner.py`：Python 评估器，按严格四元组 (type, value, start, end)
+  对比 fixtures/cases.jsonl 的人工标注 vs 网关 `/_api/detect` 实际输出，
+  输出 precision / recall / F1（总体 + 分实体类型）+ 延迟 p50/p95/p99/max/mean
+- `bench/reports/phase0_regex_20260910-213746.md`：regex 引擎首测结果
+  **240 条 / 0 错 / precision=1.0 / recall=0.9444 / F1=0.9714**
+  延迟 p50=1ms p95=21ms p99=28ms max=30ms
+
+### 关键决策点（zh_address 是最高 ROI 优化目标）
+
+| 实体类型 | TP | FP | FN | precision | recall | F1 |
+|---|---|---|---|---|---|---|
+| zh_person_name | 60 | 0 | 0 | 1.0 | 1.0 | 1.0 |
+| zh_phone | 103 | 0 | 0 | 1.0 | 1.0 | 1.0 |
+| zh_id_card | 67 | 0 | 0 | 1.0 | 1.0 | 1.0 |
+| zh_bank_card | 35 | 0 | 0 | 1.0 | 1.0 | 1.0 |
+| email | 35 | 0 | 0 | 1.0 | 1.0 | 1.0 |
+| **zh_address** | **40** | **0** | **20** | **1.0** | **0.67** | **0.80** |
+
+**结论**：
+- regex 已超 Spark §16 v1 验收线（中文召回率 ≥ 85%）
+- 是否仍需 PII Engineer（F1 0.918 / 180ms）需真实对抗语料——合成语料上 PII Engineer
+  平均 F1（0.918）反而低于 regex（0.97），且延迟是 6 倍
+- **下一阶段最高 ROI 方向**：
+  1. **zh_address 召回优化**（正则现在只到 0.67，是唯一短板）
+  2. 真实对抗语料构造（合成样本可能不代表现实分布）
+
+### 探路记录
+
+| 任务 | 选择路径 | 理由 |
+|---|---|---|
+| 审计查询端点设计 | 直达（`GET /_api/audit?limit=N` + 内存环） | 桌面 UI 轮询即可，无需 SSE；环 200 条覆盖 5 分钟常态流量 |
+| 审计写入触发点 | 直达（proxy 三分支统一收尾 recordAudit） | blocked / full / stream 路径都用同 recordAudit 闭包，零分叉 |
+| 审计 ring 缓冲 | 直达（固定 cap=200，截断即丢最旧） | 内存可控；长期落盘靠 audit.log JSONL（已存在），UI 仅消费近期 |
+| bench 评估器语言 | 直达（Python） | 同 generate.py/validate.py 同栈，无需新工具链；regex 检测逻辑 |
+| | | 在 Go 侧已实现，只需通过 HTTP `/_api/detect` 拿真实结果 |
+| bench 匹配口径 | 直达（严格四元组） | 与 privaite-bench 一致；区间重叠评估会高估 F1，不利决策 |
+| PII Engineer 集成 | 步行（暂缓） | regex 已过验收线；模型 620MB + Rust 工具链需数小时 |
+| | | —— 应先优化 zh_address 再决定是否上 NER |

@@ -109,8 +109,9 @@ buildall() {
   (cd "$SRC_DIR" && \
     go build -o ./llmate-gate.exe ./cmd/llmate-gate && \
     go build -o ./mock-llm.exe ./cmd/mock-llm && \
-    go build -o ./mock-detector.exe ./cmd/mock-detector) || return 1
-  cp "$SRC_DIR/llmate-gate.exe" "$SRC_DIR/mock-llm.exe" "$SRC_DIR/mock-detector.exe" "$BUILD_DIR/" && \
+    go build -o ./mock-detector.exe ./cmd/mock-detector && \
+    go build -o ./mcp-server.exe ./cmd/mcp-server) || return 1
+  cp "$SRC_DIR/llmate-gate.exe" "$SRC_DIR/mock-llm.exe" "$SRC_DIR/mock-detector.exe" "$SRC_DIR/mcp-server.exe" "$BUILD_DIR/" && \
     log "buildall ok -> $BUILD_DIR"
 }
 

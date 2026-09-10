@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "llmate-gate": {
+      "command": "C:/path/to/mcp-server.exe",
+      "env": {
+        "LLMATE_GATEWAY_URL": "http://127.0.0.1:8400",
+        "LLMATE_GATEWAY_TOKEN": "<你的网关令牌，对应网关启动时的 GATEWAY_AUTH_TOKEN>"
+      }
+    }
+  }
+}

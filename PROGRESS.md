@@ -2,9 +2,9 @@
 
 > 探路者 Loop 的进度追踪（执行手册 §"进度追踪"）。每完成一阶段更新一次。
 
-## 当前阶段：Phase 2 · 阶段 3（VS Code 扩展 + Claude Code hooks + 常驻隐私端点）已完成
+## 当前阶段：Phase 3 · 任务 3.1（MCP 薄门面）已完成
 
-## 当前任务：Phase 2 全阶段收口（跨 SSE 还原 + tool-call 逐值脱敏 + per-type fate + Merkle 增量 + 常驻隐私端点 + Claude Code hooks + VS Code 扩展）。下一步：Phase 3 MCP 门面（任务 3.1，v1.1）
+## 当前任务：Phase 3 MCP 门面交付（anonymize / deanonymize / scan_tool_params，stdio 协议，复用网关隐私端点）。下一步：Phase 2 任务 2.3 Tauri 桌面 UI（可选）/ Phase 3 收口
 
 ## 状态：执行中
 
@@ -180,6 +180,40 @@ restore 还原原文 / hooks 6 项断言全绿 / 扩展 `tsc` 零错误。
 
 - [x] Phase 2：tool-call 递归扫描 / per-type fate / VS Code 扩展 / Claude Code hooks 全部落地
 
+#### Phase 3 · 任务 3.1：MCP 薄门面
+
+对应执行手册 Phase 3 任务 3.1（v1.1）。三项子交付：
+
+**1. `gateway/internal/mcp/client.go`（新增）**——客户端包，`net/http` 零外部依赖
+- 封装 `Anonymize` / `Deanonymize` / `ScanToolParams`，经 HTTP 调网关常驻隐私端点
+  `POST /v1/privacy/redact|restore`，Bearer 鉴权、4MB 限流读取、非 2xx 返回带响应体的错误。
+- `NewClientFromEnv()` 读 `LLMATE_GATEWAY_URL`（默认 `http://127.0.0.1:8400`）与
+  `LLMATE_GATEWAY_TOKEN`（回退 `GATEWAY_AUTH_TOKEN`）。
+- 请求体也用 `SetEscapeHTML(false)` 序列化——默认 `json.Marshal` 会把占位符转义成 `\u003c`。
+
+**2. `gateway/cmd/mcp-server/main.go`（新增）**——stdio MCP Server
+- `mark3labs/mcp-go v0.37.0`，`server.NewMCPServer` + `WithToolCapabilities(false)` + `ServeStdio`。
+- 三个工具：`anonymize`（递归脱敏，返回占位符 + request_id）、`deanonymize`（按 request_id 还原）、
+  `scan_tool_params`（预检式 PII 扫描，返回 `has_pii` + 脱敏样例 + `recommendation`）。
+- 日志一律写 stderr（stdio 传输占用 stdout，不能污染）。
+
+**3. 文档**：`cmd/mcp-server/README.md` + `claude_desktop_config.json.example`。
+`scripts/dev.sh buildall` 增加 mcp-server 构建。
+
+**依赖选型（探路修正）**：`mcp-go@v1.0.0` 要求 **Go ≥ 1.25.5**，会把模块 `go` 指令顶到 1.25.5 并自动拉
+go1.26.8 工具链，破坏当前 Go 1.24 基线（CI pin 1.24.5）。故 **pin `v0.37.0`**（兼容 Go 1.24，`go` 指令不变）。
+
+**验证**：
+- 单测 `internal/mcp` **6/6 PASS**（字面占位符、redact→restore 往返、缺 request_id 报错、
+  scan 报告、text 模式、鉴权失败）。`go vet ./...` 干净，mcp-server 构建通过。
+- **stdio 集成冒烟 SMOKE PASS**（对本地网关 :8600，Python 驱动发真实 JSON-RPC）：
+  `initialize` 广播 tools 能力 → `tools/list` 返回 3 工具 → `anonymize` 输出字面
+  `<<zh_phone_1>>` / `<<email_1>>` + request_id → `deanonymize` 还原为原文。
+
+**踩坑**：`resultText` 初版用 `json.MarshalIndent`，默认 HTML 转义把结果文本里的占位符变成
+`\u003c`（与网关 `writePrivacyJSON`、客户端 `post` 同一类问题）。改为 `SetEscapeHTML(false)`
++ `SetIndent` 后字面输出。至此项目内三处占位符输出点（网关端点 / MCP 客户端 / MCP 结果文本）已统一。
+
 ### 探路记录
 
 | 任务 | 选择路径 | 理由 |
@@ -193,3 +227,5 @@ restore 还原原文 / hooks 6 项断言全绿 / 扩展 `tsc` 零错误。
 | E3 跨 SSE 边界还原 | 步行（已知限制） | 完整修复需 buf 分事件 → 跨事件 substring 还原（任务 2.4 标记 TODO，不阻断 Phase 1 收口） |
 | 覆盖率门 | 跳转（artifact 上传而非 PR 阻断） | 首次覆盖基线尚未稳定，先收集数据；阈值门禁放到 v0.2 |
 | cn-pii-bench 模块化 | 跳转（独立 Python 校验脚本） | WSL 9P 不支持 go mod init 落锁，跳过 Go test；用 Python 直接读 JSONL，等 CI 跑通了再补 Go loader |
+| 3.1 MCP 门面 | 直达（官方 SDK + 调常驻隐私端点） | SDK 一行引入不造协议轮子；经 HTTP 调网关端点才能与反代层共用同一 vault（满足「共享映射表」验收），内嵌核心会映射表分离 |
+| 3.1 MCP SDK 版本 | 跳转（pin v0.37.0 而非 latest） | v1.0.0 要求 Go ≥ 1.25.5 会顶高模块 go 指令并拉新工具链，破坏 Go 1.24 基线 |

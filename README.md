@@ -86,31 +86,37 @@ LLMate Gate 的定位：在中文语境下，用格式保持的仿真替换（"�
 
 ## 📦 安装
 
-### Docker（推荐，30 秒部署）
+### 单二进制（当前实际分发方式，安装 < 30 秒）
 
 ```bash
-docker run -d \
-  --name llmate-gate \
-  -p 8400:8400 \
-  -v ./vault_data:/app/vault_data \
-  -e TARGET_LLM=https://api.openai.com \
-  -e GATEWAY_AUTH_TOKEN=your-secure-token \
-  ghcr.io/llmate/llmate-gate:latest
+# 代理守护进程（Go，单文件 ~14.6MB，无 Docker / 无模型下载）
+git clone https://github.com/Jzh-li/LLMate-Gate
+cd LLMate-Gate/gateway
+go build -o llmate-gate ./cmd/llmate-gate
+./llmate-gate --config configs/config.yaml   # 默认监听 :8400，调试面板默认开启
+```
+
+### Docker（规划中，尚未落地）
+
+> ⚠️ **冲突标注（2026-09-10 核对）**：本仓库当前**不存在 `Dockerfile` 或 `deploy/` 目录**，以下命令为规划形态，现阶段**不可用**。
+> 两方案利弊：① **补一个 Dockerfile**（约半小时，`CGO_ENABLED=0` 静态构建，多阶段镜像）——保留本节并真正可用，适合一键部署；② **移除本节**——避免文档误导，但丢失部署形态占位。当前未擅自新增 `Dockerfile`（属新增交付物，需你确认），故仅标注。
+
+```bash
+# 规划形态，暂不可用
+docker run -d -p 8400:8400 ghcr.io/llmate/llmate-gate:latest
 ```
 
 ### 从源码构建
 
 ```bash
 # 代理守护进程（Go）
-git clone https://github.com/llmate/llmate-gate
-cd llmate-gate/gateway
-go build -o llmate-gate .
+git clone https://github.com/Jzh-li/LLMate-Gate
+cd LLMate-Gate/gateway
+go build -o llmate-gate ./cmd/llmate-gate
 ./llmate-gate --listen :8400 --upstream https://api.openai.com
 
-# 桌面 UI（Tauri，可选）
-cd ../desktop
-npm install
-npm run tauri:build
+# 桌面 UI（Tauri）
+# ⚠️ 未启动：仓库无 desktop/ 目录，Tauri 属 Phase 4 待办（见 HANDOFF §5）
 ```
 
 ### VS Code 扩展
@@ -265,9 +271,16 @@ Agent 调用工具时发出的参数：
 | 组织机构 | 公司/机构名 | 北京科技有限公司 |
 | IP / URL / 日期 / 金额 / 邮编 | 标准格式 | - |
 
+> ⚠️ **冲突标注（2026-09-10 核对）**：上表是**产品规划目标**；当前代码实现（`gateway/pkg/types/detect.go`）的实体类型常量只有 **11 个**：
+> `zh_person_name` / `zh_phone` / `zh_id_card` / `zh_bank_card` / `zh_address` / `email` / `ip_address` / `date` / `api_key` / `password` / `token`。
+> 其中 **组织机构 / URL / 金额 / 邮编未实现**；**车牌正则 `rePlate` 已存在于 `internal/detector/regex.go`，但没有对应的类型常量、不参与输出**（见该文件注释处的冲突标注）。
+> 两方案利弊：① **接线车牌 + 补齐类型**（扩检测面，但每个新类型都需 ground truth 与 bench 重跑）；② **从 README 移除未实现类型**（文档诚实，但缩小对外承诺）。当前仅标注，未擅自改动检测行为。
+
 ### 国际化实体
 
 PII Engineer 支持 13+ 语言：English, Malay, Tamil, Chinese, Indonesian, Vietnamese, Thai, Hindi, Bengali, Korean, Japanese, German, French, Spanish, Portuguese, Russian, Arabic, Turkish, Polish, Dutch, Italian, Swedish 等 35+ 语言。
+
+> ⚠️ **未兑现**：上述多语言能力来自 PII Engineer（尚未集成，见 `DECISIONS.md D001` 与 `DECISION.md`）。当前默认引擎为内置中文正则 `detection.engine=regex`，**仅覆盖上表 11 类**。
 
 ## 🔍 审计与合规
 
@@ -276,15 +289,22 @@ LLMate Gate 的审计日志是结构化的，每条记录包含：
 ```json
 {
   "timestamp": "2026-09-09T15:30:00Z",
+  "schema_version": "1",
   "request_id": "req_a3f9b2",
   "conversation_id": "conv_8821",
-  "entity_types": ["zh_person_name", "zh_phone", "zh_id_card"],
-  "replacement_strategy": "simulate",
   "upstream": "openai",
+  "detected_entities": [{"type": "zh_person_name", "score": 0.97}],
+  "replaced_count": 3,
+  "strategy": "placeholder",
+  "restored": true,
+  "streaming": false,
   "latency_ms": 212,
-  "restored": true
+  "detector_latency_ms": 3,
+  "outcome": "success"
 }
 ```
+
+> 字段名以 `Specs/02-接口与数据契约规范.md` §9.1 与 `gateway/internal/audit/audit.go` 为准（旧示例里的 `entity_types` / `replacement_strategy` 已废弃）。
 
 可导出为 PIPL / GDPR / 等保 2.0 合规报告格式。
 
@@ -292,59 +312,69 @@ LLMate Gate 的审计日志是结构化的，每条记录包含：
 
 ## 📈 性能基准
 
-基于 cn-pii-bench 在 2026 年 8 月的测评（Intel i7-12700, 32GB RAM）：
+> 实测时点 **2026-09-10**，引擎 `detection.engine=regex`（内置正则），语料 `bench/fixtures/cases.jsonl`（240 条合成样本，8 子集 × 30）。
+> 报告原文：`bench/reports/phase0_regex-v2_20260910-214153.md`。
 
-| 指标 | 目标 | 实测 |
-| --- | --- | --- |
-| 中文 PII 召回率 | ≥ 85% | 91.8%（F1） |
-| Agent 多轮 P99 延迟 | < 2s | 1.2s（含 detection_cache） |
-| 单条检测延迟（CPU） | - | ~180ms |
-| 安装到可用 | < 5 分钟 | < 30 秒（Docker） |
-| 内存占用 | - | ~80MB（空闲）/ ~200MB（峰值） |
+| 指标 | 目标 | 实测 | 口径 |
+| --- | --- | --- | --- |
+| 中文 PII 召回率 | ≥ 85% | **100%**（F1 = 1.0000，240/240） | 合成语料，严格四元组匹配 |
+| 检测端点 P99 延迟 | < 2s | **23ms**（p50=1ms / p95=21ms / max=30ms） | `/_api/detect` 单条 |
+| Agent 多轮端到端 P99 | < 2s | **未测** ⚠️ | 见下方说明 |
+| 安装到可用 | < 5 分钟 | **< 30 秒** | 单二进制，无需 Docker / 模型 |
+| 内存占用 | - | 未测 | 待补 |
+
+> ⚠️ **两点诚实说明**
+> 1. 语料为**合成样本**，不代表真实分布；真实对抗语料待补（决定是否需要 NER）。
+> 2. §16 第 2 项原意是"Agent 多轮对话端到端 P99"，当前只有**检测端点**的 p99；**端到端多轮未压测**，故该项不宣称达成（详见 `V1_READINESS.md`）。
+> 3. 上一版 README 中的 "91.8% / 1.2s / ~180ms / 80-200MB" 来自 **PII Engineer 的公开规格**（`Specs/00` 附录 A），**不是本项目实测值**，已更正。
 
 ### 与竞品对比
+
+> 下表"竞品"列来自 `Specs/00-整体技术方案.md` §13.1 的调研结论；**LLMate Gate 一行已按实测更正**（原写 "F1 0.918" 是 PII Engineer 的规格值，不是本产品实测）。
 
 | 项目 | 中文 PII | 仿真替换 | Tool-call 扫描 | 中文仿真 | 性能 |
 | --- | --- | --- | --- | --- | --- |
 | PrivAiTe | ❌ | 弱 | ❌ | ✅ JSON 值替换 | ❌ Python，较慢 |
-| Kiji | ❌ | 仅 6 语言 | ✅ | ❓ | ❌ 英文中心 Go |
+| Kiji | ❌ | 仅 6 语言 | ❓ 待测 | ❓ | ❌ 英文中心 Go |
 | Eidolon | ❌ | ✅ 英文 | ❌ | ❌ | Rust，快 |
 | AI Privacy Gateway | ✅ | 正则 | ❌ | ❌ | Python |
-| LLMate Gate | ✅ F1 0.918 | ✅ v1.1 | ✅ AST 感知 | ✅ 独占 | Go + Rust |
+| **LLMate Gate（实测）** | ✅ F1 **1.0**（合成语料） | ⏳ v1.1 | ✅ 键保留递归扫描 | ✅ 独占 | Go，检测 p99 23ms |
 
 ## 🗺️ 路线图
 
 ### v1（6-8 周，当前进行中）
 
-- ✅ OpenAI 兼容透明代理（:8400）
-- ✅ PII Engineer 中文检测集成（F1 0.918）
-- ✅ Tool-call 参数递归扫描
-- ✅ 流式还原（trie 缓冲）
-- ✅ detection_cache 绑定 conversation_id
+- ✅ OpenAI 兼容透明代理（:8400，含 `/v1/messages` Anthropic 形态）
+- ⏸️ **PII Engineer 中文检测集成** —— 暂缓：`DECISIONS.md D001` 降级为可选，默认引擎为内置 `regex`；合成语料 F1 已达 1.0，NER 集成 ROI 待真实对抗语料验证
+- ✅ Tool-call 参数递归扫描（键保留）
+- ✅ 流式还原（SSE 帧感知 + 跨事件占位符拼接）
+- ✅ detection_cache 绑定 conversation_id（Merkle 前缀链增量）
 - ✅ fail-closed 电路断路器
-- ✅ 占位符替换
+- ✅ 占位符替换 + 中文仿真引擎（仿真模式 v1.1 启用）
 - ✅ VS Code 扩展 + Claude Code hooks
-- ✅ Tauri 桌面 UI
-- ✅ 审计日志 + cn-pii-bench
-- ⏳ 中文格式保持仿真替换（v1.1）
+- ✅ **MCP Server 门面**（anonymize / deanonymize / scan_tool_params，stdio）—— 原计划 v1.1，**已提前在本阶段交付**
+- ❌ **Tauri 桌面 UI** —— 未启动（Phase 4，无 Rust 工具链）
+- ✅ 审计日志（结构化 JSONL + `/_api/audit` + 面板审计 Tab）+ cn-pii-bench（240 条 + 评估器）
+- ⏳ 中文格式保持仿真替换启用为默认（v1.1，需 A/B 验证不降 LLM 输出质量）
 
 ### v2
 
 - 仿真替换升级为 ML 生成（上下文感知的仿真值）
-- MCP Server 门面（让 Agent 主动调用脱敏）
 - 企业 SSO + 团队策略下发
 - 多上游负载均衡 + 敏感路由（本地模型兜底）
+- 真实对抗语料 + PII Engineer ROI 重评
 
 ## 📦 技术栈
 
 | 组件 | 技术选型 | 理由 |
 | --- | --- | --- |
-| 代理守护进程 | Go | 高并发、单文件部署、:8400 OpenAI 兼容 |
-| 检测引擎 | Rust + ONNX Runtime | PII Engineer 原生 Rust，CPU 推理 ~180ms |
-| 仿真替换引擎 | Go + Faker zh | 中文 locale + 格式校验 |
+| 代理守护进程 | Go 1.24 | 高并发、单文件部署、:8400 OpenAI 兼容 |
+| 检测引擎 | **内置中文正则（默认 `regex`）**，PII Engineer sidecar 可选 | D001：模型 620MB + Rust 工具链暂不引入；两者同 `detector.Client` 接口，改配置即可切换 |
+| 仿真替换引擎 | Go（规则生成 + 校验位） | 格式保持、中文原生、零依赖；v1.1 启用 |
 | VS Code 扩展 | TypeScript | 原生 API |
-| 桌面 UI | Tauri (TS + Rust) | 与检测引擎共享 Rust 生态 |
-| 基准测试 | Python + Rust | cn-pii-bench |
+| 桌面 UI | Tauri (TS + Rust) | **未启动**，Phase 4 待办 |
+| MCP 门面 | Go + `mark3labs/mcp-go` | stdio，已交付（v0.37.0 pin，兼容 Go 1.24） |
+| 基准测试 | Python（`bench/runner.py`）+ Go（`cmd/bench-runner`） | cn-pii-bench；两套口径见 `DECISION.md` 注释 |
 
 ## 📜 License
 

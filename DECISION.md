@@ -29,6 +29,17 @@ Phase 0 要回答：**这套方案是否构成一个可防御的代差？** 即�
 
 > **四方对比（PrivAiTe / AI Privacy Gateway / Eidolon）按用户要求暂不做**，见 §6。
 
+> ⚠️ **2026-09-10 数据刷新注记（本文档 §3/§4 的数字已被后续提交作废）**
+> `30c9de0`（地址正则支持直辖市）之后，同一语料重跑结果为 **Precision 1.000 / Recall 1.000 / F1 1.000**
+> （240/240，延迟 p99 23ms），报告见 `bench/reports/phase0_regex-v2_20260910-214153.md`。
+> 本文档 §3 保留的是 **v1（修复前）** 原始测量，作为立项当时的凭证，**不再代表当前基线**。
+>
+> **两套评估器口径不同，数字不可直接比较**（`SPEC_ALIGNMENT.md` C5 / Q5）：
+> - 本 §2 声明的口径 = Go `cmd/bench-runner`，"**同类型 + 区间重叠**"；
+> - `PROGRESS.md` 与 `bench/reports/*-v2` 的口径 = Python `bench/runner.py` 经 `/_api/detect`，"**严格四元组 (type,value,start,end)**"。
+> CI 的 `bench-baseline` job 跑的是前者（召回 <0.9 守门），对外汇报用的是后者。
+> **当前处置**：未删除任一评估器、未改 CI；仅在此标注差异，等你裁决以谁为准。
+
 ---
 
 ## 3. 结果

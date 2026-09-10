@@ -153,6 +153,16 @@ git -c safe.directory='*' push origin main
 **用户决策（2026-09-10）**：核心功能优先，**部署（服务器 / 域名 / 容器化 / 发布流水线）后置**；
 **「分发可安装性」算功能主题**，须在构建/部署之前完成（三平台产物 + GitHub Release + 一个包管理器）。
 理由：没有可下载产物就没人试装，拿不到真实对抗语料，会反过来拖慢召回率验收与 PII Engineer ROI 判断。
+
+**B 组「最小分发」完成（2026-09-11 00:15）**：
+
+| 项 | 状态 | 入口 |
+|---|---|---|
+| 三平台交叉编译 | ✅ | `scripts/release.sh`（5 平台，CI 推 tag 自动跑） |
+| GitHub Release | ✅ | `.github/workflows/release.yml` |
+| 一个包管理器 | ✅ | `scoop-bucket/llmate-gate.json`（待 `Jzh-li/scoop-bucket` 仓就绪后启用） |
+| 桌面托盘 | ✅ | 走系统原生（计划任务/systemd/launchd + 桌面 LNK 指向 `_debug`），放弃 systray（CGO 与纯 Go 交叉编译冲突） |
+
 详细任务卡见 `.workbuddy/TODO_QUEUE.md` 末段。
 
 ---

@@ -86,14 +86,50 @@ LLMate Gate 的定位：在中文语境下，用格式保持的仿真替换（"�
 
 ## 📦 安装
 
-### 单二进制（当前实际分发方式，安装 < 30 秒）
+### 选项 1：从 GitHub Release 下载（推荐 · 30 秒）
 
 ```bash
-# 代理守护进程（Go，单文件 ~14.6MB，无 Docker / 无模型下载）
+# macOS Apple Silicon
+curl -L -o llmate-gate https://github.com/Jzh-li/LLMate-Gate/releases/latest/download/llmate-gate-darwin-arm64
+chmod +x llmate-gate && ./llmate-gate --version
+
+# Linux x86_64
+curl -L -o llmate-gate https://github.com/Jzh-li/LLMate-Gate/releases/latest/download/llmate-gate-linux-amd64
+chmod +x llmate-gate && ./llmate-gate --version
+
+# Windows (PowerShell)
+Invoke-WebRequest -Uri https://github.com/Jzh-li/LLMate-Gate/releases/latest/download/llmate-gate-windows-amd64.exe -OutFile llmate-gate.exe
+.\llmate-gate.exe --version
+```
+
+### 选项 2：包管理器
+
+**Windows · Scoop**（需先 `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`）：
+
+```powershell
+scoop bucket add llmate-gate https://github.com/Jzh-li/scoop-bucket
+scoop install llmate-gate
+llmate-gate --version
+```
+
+> v0.1 manifest 已就绪（`scoop-bucket/llmate-gate.json`），待独立仓 `Jzh-li/scoop-bucket` 创建后可启用 `scoop install`。
+> macOS · Homebrew tap 计划在 v1.1 上架。
+
+### 选项 3：从源码构建
+
+```bash
 git clone https://github.com/Jzh-li/LLMate-Gate
 cd LLMate-Gate/gateway
 go build -o llmate-gate ./cmd/llmate-gate
 ./llmate-gate --config configs/config.yaml   # 默认监听 :8400，调试面板默认开启
+```
+
+### 选项 4：自交叉编译（多平台 release）
+
+```bash
+./scripts/release.sh v0.1.0      # 在当前机器能原生编译的子集（Windows 出 windows.exe，类推）
+./scripts/install.ps1            # Windows：拷 + 注册计划任务 + 桌面快捷方式
+./scripts/install.sh             # Linux/macOS：拷 + systemd/launchd 开机自启
 ```
 
 ### Docker（规划中，尚未落地）

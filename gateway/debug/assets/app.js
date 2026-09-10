@@ -46,6 +46,7 @@
       $$(".tab-pane").forEach((p) => p.classList.remove("active"));
       btn.classList.add("active");
       $("#tab-" + btn.dataset.tab).classList.add("active");
+      if (btn.dataset.tab === "audit" && typeof auditRefresh === "function") auditRefresh();
     });
   });
 
@@ -269,10 +270,70 @@
     }
   });
 
+  // ----- 审计 -----
+  async function auditRefresh() {
+    const limit = $("#auditLimit") ? $("#auditLimit").value : 50;
+    const status = $("#auditStatus");
+    try {
+      const resp = await fetch("/_api/audit?limit=" + encodeURIComponent(limit), { headers: { "Accept": "application/json" } });
+      if (!resp.ok) { if (status) status.textContent = "查询失败 " + resp.status; return; }
+      const data = await resp.json();
+      const events = data.events || [];
+      renderAudit(events);
+      if (status) status.textContent = "共 " + (data.count != null ? data.count : events.length) + " 条";
+    } catch (e) {
+      if (status) status.textContent = "请求失败：" + e.message;
+    }
+  }
+  function renderAudit(events) {
+    const tb = $("#auditBody");
+    if (!tb) return;
+    if (events.length === 0) {
+      tb.innerHTML = '<tr><td colspan="9" style="color: var(--text-dim); text-align:center;">暂无审计事件（需开启 audit.enabled）</td></tr>';
+      return;
+    }
+    tb.innerHTML = events.map((e) => {
+      const ents = (e.detected_entities || []).map((x) => x.type).join(", ") || "—";
+      const cls = e.outcome === "blocked" ? "blocked" : (e.outcome === "error" ? "error" : "passed");
+      return `<tr data-detail='${escape(JSON.stringify(e))}'>
+        <td>${escape(fmtTime(e.timestamp))}</td>
+        <td>${escape(e.model || "—")}</td>
+        <td>${escape(e.upstream || "—")}</td>
+        <td>${escape(ents)}</td>
+        <td>${escape(e.replaced_count)}</td>
+        <td>${escape(e.strategy || "—")}</td>
+        <td>${e.restored ? "✓" : "✗"}</td>
+        <td><span class="badge ${cls}">${escape(e.outcome || "?")}</span></td>
+        <td>${escape(fmtDuration(e.latency_ms))}</td>
+      </tr>`;
+    }).join("");
+    $$("#auditBody tr[data-detail]").forEach((tr) => {
+      tr.addEventListener("click", () => {
+        const raw = tr.getAttribute("data-detail");
+        let obj; try { obj = JSON.parse(raw); } catch { obj = null; }
+        const block = $("#auditDetailBlock");
+        const pre = $("#auditDetail");
+        if (!obj) { block.classList.add("hidden"); return; }
+        block.classList.remove("hidden");
+        pre.textContent = JSON.stringify(obj, null, 2);
+        pre.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
+    });
+  }
+  if ($("#auditRefresh")) $("#auditRefresh").addEventListener("click", auditRefresh);
+  if ($("#auditLimit")) $("#auditLimit").addEventListener("change", auditRefresh);
+
   // ----- 启动 -----
   connectWS();
   refreshTraffic();
   loadRules();
   // 周期性拉取兜底（WS 断线期间不丢记录）
   setInterval(refreshTraffic, 3000);
+  // 审计页自动刷新（仅当审计 Tab 激活且开启自动刷新）
+  setInterval(() => {
+    const active = $(".tab.active");
+    if (active && active.dataset.tab === "audit" && $("#auditAuto") && $("#auditAuto").checked) {
+      if (typeof auditRefresh === "function") auditRefresh();
+    }
+  }, 3000);
 })();

@@ -22,6 +22,9 @@ vscode-ext/out/
 # 敏感 fixture（仅本地使用）
 **/testdata/private/
 
+# 本地冒烟测试配置（单人本机验证用，不进版本库）
+gateway/configs/smoke.yaml
+
 # WorkBuddy 本地数据
 # 注意：gateway/go.sum 必须入库，否则 CI（干净 checkout）无法 go mod verify / go test
 .workbuddy/

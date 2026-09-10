@@ -24,6 +24,7 @@
   <button class="tab active" data-tab="traffic">流量</button>
   <button class="tab" data-tab="playground">Playground</button>
   <button class="tab" data-tab="rules">规则配置</button>
+  <button class="tab" data-tab="audit">审计</button>
 </nav>
 
 <main>
@@ -147,6 +148,39 @@
       </label>
       <button id="ruleApply" class="btn primary">应用</button>
       <span id="ruleStatus" class="hint"></span>
+    </div>
+  </section>
+
+  <!-- Tab 4: 审计 -->
+  <section id="tab-audit" class="tab-pane">
+    <div class="block audit-toolbar">
+      <h4>结构化审计日志（契约 §9）</h4>
+      <label>条数
+        <select id="auditLimit">
+          <option value="10">10</option>
+          <option value="50" selected>50</option>
+          <option value="100">100</option>
+          <option value="500">500</option>
+        </select>
+      </label>
+      <button id="auditRefresh" class="btn primary">刷新</button>
+      <label class="auto"><input type="checkbox" id="auditAuto" checked /> 自动刷新</label>
+      <span id="auditStatus" class="hint"></span>
+    </div>
+    <div class="block">
+      <table class="mapping-table audit-table">
+        <thead><tr>
+          <th>时间</th><th>模型</th><th>上游</th><th>实体类型</th>
+          <th>替换数</th><th>策略</th><th>还原</th><th>结果</th><th>延迟</th>
+        </tr></thead>
+        <tbody id="auditBody">
+          <tr><td colspan="9" style="color: var(--text-dim); text-align:center;">暂无审计事件（需开启 audit.enabled）</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="block hidden" id="auditDetailBlock">
+      <h4>事件详情</h4>
+      <pre id="auditDetail" class="code"></pre>
     </div>
   </section>
 </main>

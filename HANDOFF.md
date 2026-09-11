@@ -255,3 +255,11 @@ git -c safe.directory='*' push origin main
 | `--version` 命令行开关 | `6b922ac` | `main.go` 新增 `--version` / `-version`，打印 ldflags 注入的版本号后退出，供 scoop `post_install` 校验 |
 | 多轮端到端 P99 基准 harness | `5c68bb3` `df00ea6` | `e2e/latency.sh` + `e2e/latency_client.py`（仅 Python 标准库）；mock-llm 加 `-delay` 开关；收口 V1_READINESS R3（v1 验收 5/7 → 6/7） |
 | 指标对齐（方案② 改 spec 承认现状） | `fa1ac05` | `Specs/00` §14.2 回写为实现侧真实指标名（blocked/fail_closed、seconds 单位、补录多出指标、缺失 4 项列规划中）；metrics.go / SPEC_ALIGNMENT C7/Q7 / V1_READINESS R4 同步 |
+
+## 11. 近期收口记录（2026-09-12 凌晨，A1+A2）
+
+| 任务 | commit | 说明 |
+|---|---|---|
+| A2 补齐 4 个缺失 Prometheus 指标 | 待提交 | `metrics.go` 新增 `llmate_pii_detected_total{entity_type,fate}`、`llmate_tool_calls_scanned_total`、`llmate_request_total_latency_seconds{endpoint}`、`llmate_response_restore_latency_seconds{endpoint}`；接线：recordReplace（PIIDetected）、transform/anonymizeJSONString 改 *Proxy 方法（ToolCallsScanned）、recordAudit（RequestLatency）、fullResponse/streamResponse（RestoreLatency）；新增 metrics_test.go（注册 + 写入）和 TestProxy_MetricsIntegration 端到端；`Specs/00` §14.2 规划中 4 项已移除 |
+| A1 CI 质量门（子集） | 待提交 | ci.yml: GO_VERSION `1.24.9`（修 25 个 stdlib 漏洞）；verify 加 `-race`；新增 `vuln` job（govulncheck）；coverage job 加 ≥35% 门槛（基线 41.9%）。**未做**：lint（golangci-lint 配置待就绪）、bench 性能回退 >10% 检测 |
+| TODO_QUEUE 清理 | 待提交 | 移除已闭环卡点；B 组落地后从打包脚本卡移除；新增「桌面 UI 计划任务/快捷方式」卡（替代 systray，因 CGO 冲突已放弃 systray） |

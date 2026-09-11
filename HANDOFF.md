@@ -115,6 +115,10 @@ git -c safe.directory='*' push origin main
 | `8e29e0d` | DECISION §8 差异化清单（3 层 12 项） | 文档；含 4 空白 + 5 不做 |
 | `455405f` | 协议层 T1+T2+T3（块 allowlist / gate_only / PII 块类型） | go test + vet 双绿 |
 | 双语检测 | 中英文 PII 基线（见 §6） | 中文 240 条 F1=1.0 零回归 + 英文 180 条 F1=1.0 |
+| `c70542c` | 双语检测基线（中英 PII 实体对齐 + 命名空间分离） | 全包 go test + vet 双绿 |
+| `68f00b8` | T12a Responses API 协议路径 + Q-conflicts 裁决 + B 组配置 | 端到端测试 PASS；SPEC §4.1 闭环 |
+| `cd36ced` | fix(release): 修正跨平台编译工作目录与产物路径 | release.yml 从仓库根改 working-directory: gateway |
+| **tag `v0.1.0`** | 首版可分发里程碑（2026-09-11） | 推 tag 触发 CI 自动跨平台编译 + 建 GitHub Release |
 
 完整：`git -c safe.directory='*' log --oneline -20`
 
@@ -157,14 +161,20 @@ git -c safe.directory='*' push origin main
 **「分发可安装性」算功能主题**，须在构建/部署之前完成（三平台产物 + GitHub Release + 一个包管理器）。
 理由：没有可下载产物就没人试装，拿不到真实对抗语料，会反过来拖慢召回率验收与 PII Engineer ROI 判断。
 
-**B 组「最小分发」完成（2026-09-11 00:15）**：
+**B 组「最小分发」完成（2026-09-11 00:15）+ v0.1.0 实际发布（2026-09-11 20:xx）**：
 
 | 项 | 状态 | 入口 |
 |---|---|---|
-| 三平台交叉编译 | ✅ | `scripts/release.sh`（5 平台，CI 推 tag 自动跑） |
-| GitHub Release | ✅ | `.github/workflows/release.yml` |
-| 一个包管理器 | ✅ | `scoop-bucket/llmate-gate.json`（待 `Jzh-li/scoop-bucket` 仓就绪后启用） |
+| 三平台交叉编译 | ✅ | `scripts/release.sh`（6 平台：5 原 + windows/arm64） |
+| GitHub Release 自动化 | ✅ | `.github/workflows/release.yml`（on `v*.*.*` tag push → 用 CI `GITHUB_TOKEN` 自动编译 + 建 Release + 上传产物，绕开本地无 gh/token 限制） |
+| 一个包管理器 | ✅ | `scoop-bucket/llmate-gate.json`（windows amd64 + arm64 双入口，hash 已更新） |
 | 桌面托盘 | ✅ | 走系统原生（计划任务/systemd/launchd + 桌面 LNK 指向 `_debug`），放弃 systray（CGO 与纯 Go 交叉编译冲突） |
+
+**v0.1.0 发布物**：
+- tag `v0.1.0` 已打 + 推送（指向 commit `cd36ced`）
+- 本地二进制已验证：6 平台产物在 `C:/Users/jzh-l/AppData/Local/Temp/lmgate/dist/`（SHA256SUMS 同目录）
+- CI 在 tag 推送后自动编译并创建 GitHub Release（私有仓，需用户在 GitHub Actions 页确认）
+- **已知小瑕疵**：`scoop-bucket` 的 `post_install` 调用 `llmate-gate.exe --version`，但 `main.go` 未实现该 flag（仅 `-config/-no-debug/-listen`），scoop 安装时该步会报非致命错误；建议后续给 main.go 加 `--version` flag（非阻塞）
 
 详细任务卡见 `.workbuddy/TODO_QUEUE.md` 末段。
 

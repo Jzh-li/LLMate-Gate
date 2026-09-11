@@ -1,4 +1,4 @@
-# scripts/install.ps1 —— LLMate Gate Windows 一键安装（最小分发）
+﻿# scripts/install.ps1 —— LLMate Gate Windows 一键安装（最小分发）
 #
 # 行为：
 #   1. 拷 llmate-gate.exe 到 %LOCALAPPDATA%\Programs\llmate-gate\
@@ -60,6 +60,13 @@ function Do-Uninstall {
     }
     # 杀进程
     Get-Process -Name "llmate-gate" -ErrorAction SilentlyContinue | Stop-Process -Force
+    # 清理桌面快捷方式
+    $desktop = [Environment]::GetFolderPath("Desktop")
+    $lnk = Join-Path $desktop "LLMate Gate 调试面板.lnk"
+    if (Test-Path $lnk) {
+        Remove-Item -Force $lnk
+        Log "  已删除桌面快捷方式"
+    }
     if (Test-Path $InstallDir) {
         Remove-Item -Recurse -Force $InstallDir
         Log "  已删 $InstallDir"

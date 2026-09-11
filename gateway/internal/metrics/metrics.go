@@ -3,9 +3,9 @@
 // ✅ 2026-09-11 已裁决（SPEC_ALIGNMENT.md C7 / Q7）：采用「方案②——改 spec 承认现状」。
 // 本文件的指标名/单位为权威口径（Specs/00 §14.2 已回写同步），不再变更：
 //   - llmate_blocked_total 即 spec 原称的 fail_closed_total；
-//   - llmate_detect_latency_seconds 单位为秒（Prometheus 惯例单位，优于 ms）；
-//   - spec 原列但本文件未提供的 4 项（pii_detected_total / tool_calls_scanned_total /
-//     request_total_latency_ms / response_restore_latency_ms）列为「规划中」，待 v1.1 实现。
+//   - 延迟类指标单位统一为秒（Prometheus 惯例单位，优于 ms）；
+//   - spec 原列的 pii_detected_total / tool_calls_scanned_total / request_total_latency /
+//     response_restore_latency 四项已于 2026-09-12 在本文件实现（命名对齐 spec，单位用秒）。
 // 指标名属公共接口，改名会破坏已对接的 Grafana/告警，故保持现状。
 package metrics
 
@@ -26,6 +26,17 @@ type Collectors struct {
 	DetectIncremental   *prometheus.CounterVec
 	VaultSize           prometheus.Gauge
 	ActiveConns         prometheus.Gauge
+
+	// —— 以下 4 项 2026-09-12 补齐（spec §14.2 原「规划中」→「已实现」）——
+
+	// PIIDetected 检出的 PII 实体数（按类型与命运），覆盖请求+响应双向脱敏。
+	PIIDetected *prometheus.CounterVec
+	// ToolCallsScanned 被递归扫描参数的 tool_call 数量（arguments 解析一次计一次）。
+	ToolCallsScanned prometheus.Counter
+	// RequestLatency 端到端请求耗时（ingress→审计收尾），单位秒。
+	RequestLatency *prometheus.HistogramVec
+	// RestoreLatency 响应还原（de-anonymize）处理耗时，单位秒。
+	RestoreLatency *prometheus.HistogramVec
 }
 
 // New 构造并注册全部指标。
@@ -80,11 +91,30 @@ func New(reg prometheus.Registerer) *Collectors {
 			Name: "llmate_active_streams",
 			Help: "当前活跃的流式连接数",
 		}),
+		PIIDetected: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "llmate_pii_detected_total",
+			Help: "检出的 PII 实体数（按类型与命运）",
+		}, []string{"entity_type", "fate"}),
+		ToolCallsScanned: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "llmate_tool_calls_scanned_total",
+			Help: "被递归扫描参数的 tool_call 数量",
+		}),
+		RequestLatency: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "llmate_request_total_latency_seconds",
+			Help:    "端到端请求耗时分布（ingress→审计收尾）",
+			Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
+		}, []string{"endpoint"}),
+		RestoreLatency: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "llmate_response_restore_latency_seconds",
+			Help:    "响应还原（de-anonymize）处理耗时分布",
+			Buckets: []float64{0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1},
+		}, []string{"endpoint"}),
 	}
 	reg.MustRegister(
 		c.RequestsTotal, c.DetectLatency, c.ReplaceCount, c.RestoredTotal,
 		c.BlockedTotal, c.UpstreamErrors, c.StreamOrphans,
 		c.CacheHits, c.CacheMisses, c.DetectIncremental, c.VaultSize, c.ActiveConns,
+		c.PIIDetected, c.ToolCallsScanned, c.RequestLatency, c.RestoreLatency,
 	)
 	return c
 }

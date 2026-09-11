@@ -14,11 +14,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 
 	gatewayerrors "gateway/internal/errors"
 	"gateway/internal/cache"
 	"gateway/internal/detector"
+	"gateway/internal/metrics"
 	"gateway/internal/pipeline"
 	"gateway/internal/replacer"
 	"gateway/internal/simulator"
@@ -470,6 +473,96 @@ func TestProxy_ResponsesAPI_Anonymize(t *testing.T) {
 	require.Contains(t, up, "<<email_", "input 与 arguments 内邮箱应被占位符化")
 	// reasoning opaque block：整块跳过，内容原样保留（身份证不改写）
 	require.Contains(t, up, "110101199001011234", "reasoning opaque block 内容应原样透传")
+}
+
+// newTestProxyWithMetrics 构造一个带真实 Prometheus 指标的 *Proxy，专供指标集成测试。
+func newTestProxyWithMetrics(t *testing.T) (*testProxy, *metrics.Collectors, *prometheus.Registry) {
+	t.Helper()
+	v, err := vault.NewMemVault(testTTL, []byte("unit-test-passphrase"), false, "")
+	require.NoError(t, err)
+	det := detector.NewRegexEngine(detector.WithThresholds(map[string]float64{
+		"zh_person_name": 0.5, "zh_phone": 0.8,
+	}))
+	repl := replacer.New(replacer.Config{
+		Strategy:     "placeholder",
+		Irreversible: []string{"api_key", "password", "token"},
+		Simulate:     simulator.SimulateZHConfig{},
+		SessionKey:   []byte("session-key-32-bytes-long!!!"),
+	}, v)
+	proc := pipeline.New(pipeline.Config{Detector: det, Replacer: repl, Vault: v, FailClosed: true})
+
+	reg := prometheus.NewRegistry()
+	m := metrics.New(reg)
+
+	tp := &testProxy{}
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		tp.mu.Lock()
+		tp.lastUpBody = string(b)
+		tp.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"message": map[string]interface{}{"role": "assistant", "content": "ok"}},
+			},
+		})
+	}))
+	tp.px = New(proc, mustParse(t, up.URL), "", "", m, false, nil)
+	tp.closeUp = up.Close
+	t.Cleanup(up.Close)
+	return tp, m, reg
+}
+
+// TestProxy_MetricsIntegration 端到端：一次含 PII + tool_call 的 chat completions 请求，
+// 触发 4 个新指标（PIIDetected / ToolCallsScanned / RequestLatency / RestoreLatency）。
+//
+// 不绑定具体 fate 标签（policy 可决定 reversible/mask/redact），只断言实体类型被命中。
+func TestProxy_MetricsIntegration(t *testing.T) {
+	tp, m, reg := newTestProxyWithMetrics(t)
+
+	body := `{"model":"x","messages":[{"role":"user","content":"张三的手机是13800138000"}],"tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"phone\":\"13800138000\",\"email\":\"a@b.com\"}"}}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	tp.px.Handle(rec, req, "/v1/chat/completions", false)
+	require.Equal(t, 200, rec.Code)
+
+	families, err := reg.Gather()
+	require.NoError(t, err)
+
+	// 1) PIIDetected：手机号（zh_phone）+ 邮箱（email）至少各被计 1 次（fate 不定）
+	entityCounts := map[string]float64{}
+	for _, f := range families {
+		if f.GetName() != "llmate_pii_detected_total" {
+			continue
+		}
+		for _, mt := range f.Metric {
+			var entType string
+			for _, lp := range mt.Label {
+				if lp.GetName() == "entity_type" {
+					entType = lp.GetValue()
+				}
+			}
+			if entType != "" {
+				entityCounts[entType] += mt.Counter.GetValue()
+			}
+		}
+	}
+	require.Greater(t, entityCounts["zh_phone"], 0.0, "手机号应计入 PIIDetected（任意 fate）")
+	require.Greater(t, entityCounts["email"], 0.0, "邮箱应计入 PIIDetected（任意 fate）")
+
+	// 2) ToolCallsScanned：1 个 tool_call.arguments 被递归扫描
+	require.GreaterOrEqual(t, testutil.ToFloat64(m.ToolCallsScanned), 1.0)
+
+	// 3) RequestLatency：直方图至少收到 1 次观测
+	require.GreaterOrEqual(t, testutil.CollectAndCount(m.RequestLatency), 1)
+
+	// 4) RestoreLatency：非流式全包还原，至少 1 次观测
+	require.GreaterOrEqual(t, testutil.CollectAndCount(m.RestoreLatency), 1)
+
+	// 回归：原有指标仍工作（outcomeOf(2xx) = "success"，见 proxy.go）
+	require.Greater(t, testutil.ToFloat64(m.RequestsTotal.WithLabelValues("/v1/chat/completions", "success")), 0.0)
+	require.Greater(t, testutil.ToFloat64(m.RestoredTotal.WithLabelValues("/v1/chat/completions")), 0.0)
+	require.Greater(t, testutil.ToFloat64(m.PIIDetected.WithLabelValues("zh_phone", "reversible")), 0.0) // 回归：fate 标签仍正确
 }
 
 

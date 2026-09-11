@@ -224,7 +224,7 @@ func (p *Proxy) anonymizeBody(ctx context.Context, body []byte, reqID, convID st
 		return clean, nil
 	}
 
-	transformed, terr := transform(doc, false, anon)
+	transformed, terr := p.transform(doc, false, anon)
 	if terr != nil {
 		return nil, nil, terr
 	}
@@ -246,6 +246,7 @@ func (p *Proxy) recordReplace(entries []types.MappingEntry) {
 	}
 	for _, e := range entries {
 		p.m.ReplaceCount.WithLabelValues(e.Fate.String()).Inc()
+		p.m.PIIDetected.WithLabelValues(e.EntityType, e.Fate.String()).Inc()
 	}
 }
 
@@ -289,7 +290,7 @@ func extractMessageContents(doc interface{}) ([]string, bool) {
 //   - 父 key 命中 opaqueValueKeys（data / signature / encrypted_content）
 //   - string 值以 dataURLPrefixes 开头（base64 data URL）
 // 命中任一即原样返回，不进 anon。
-func transform(v interface{}, inPII bool, anon func(string) (string, error)) (interface{}, error) {
+func (p *Proxy) transform(v interface{}, inPII bool, anon func(string) (string, error)) (interface{}, error) {
 	switch x := v.(type) {
 	case map[string]interface{}:
 		// 整 map 是不透明 block：原样返回
@@ -307,7 +308,7 @@ func transform(v interface{}, inPII bool, anon func(string) (string, error)) (in
 		for k, val := range x {
 			// arguments 走 JSON 解析（OpenAI tool_calls.function.arguments）
 			if k == "arguments" {
-				r, e := anonymizeJSONString(val, anon)
+				r, e := p.anonymizeJSONString(val, anon)
 				if e != nil {
 					return nil, e
 				}
@@ -320,7 +321,7 @@ func transform(v interface{}, inPII bool, anon func(string) (string, error)) (in
 				continue
 			}
 			childPII := blockIsPII || piiFieldKeys[k]
-			r, e := transform(val, childPII, anon)
+			r, e := p.transform(val, childPII, anon)
 			if e != nil {
 				return nil, e
 			}
@@ -330,7 +331,7 @@ func transform(v interface{}, inPII bool, anon func(string) (string, error)) (in
 	case []interface{}:
 		out := make([]interface{}, len(x))
 		for i, e := range x {
-			r, err := transform(e, inPII, anon)
+			r, err := p.transform(e, inPII, anon)
 			if err != nil {
 				return nil, err
 			}
@@ -354,16 +355,20 @@ func transform(v interface{}, inPII bool, anon func(string) (string, error)) (in
 //
 // arguments 可能是：JSON 字符串（OpenAI 常见）、对象或数组（部分 SDK 已展开）。
 // 统一按 inPII=true 递归扫描：只把字符串值送检测，JSON 键永不脱敏。
-func anonymizeJSONString(v interface{}, anon func(string) (string, error)) (interface{}, error) {
+// 每次进入（即每解析一个 tool_call 的 arguments）计一次 tool_calls_scanned。
+func (p *Proxy) anonymizeJSONString(v interface{}, anon func(string) (string, error)) (interface{}, error) {
+	if p.m != nil {
+		p.m.ToolCallsScanned.Inc()
+	}
 	switch x := v.(type) {
 	case string:
 		var parsed interface{}
 		if err := json.Unmarshal([]byte(x), &parsed); err != nil {
 			return v, nil // 非 JSON：保持原样
 		}
-		return transform(parsed, true, anon)
+		return p.transform(parsed, true, anon)
 	case map[string]interface{}, []interface{}:
-		return transform(x, true, anon)
+		return p.transform(x, true, anon)
 	default:
 		return v, nil
 	}
@@ -413,9 +418,13 @@ func (p *Proxy) fullResponse(w http.ResponseWriter, resp *http.Response, endpoin
 		writeError(w, gatewayerrors.Wrap(gatewayerrors.CodeUpstreamError, "read upstream", err))
 		return
 	}
+	restoreStart := time.Now()
 	out, _ := restorer.Write(respBody)
 	rest, _ := restorer.Close()
 	restored := string(out) + string(rest)
+	if p.m != nil {
+		p.m.RestoreLatency.WithLabelValues(endpoint).Observe(time.Since(restoreStart).Seconds())
+	}
 
 	copyHeaders(w.Header(), resp.Header)
 	w.Header().Del("Content-Length") // 长度已变
@@ -476,6 +485,7 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, resp *http.Response, endpo
 	reader := bufio.NewReaderSize(resp.Body, 32*1024)
 	buf := make([]byte, 16*1024)
 	var upstreamSb strings.Builder
+	restoreStart := time.Now()
 	for {
 		n, rerr := reader.Read(buf)
 		if n > 0 {
@@ -504,6 +514,7 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, resp *http.Response, endpo
 			p.m.UpstreamErrors.WithLabelValues(endpoint, statusLabel(resp.StatusCode)).Inc()
 		}
 		p.m.RestoredTotal.WithLabelValues(endpoint).Inc()
+		p.m.RestoreLatency.WithLabelValues(endpoint).Observe(time.Since(restoreStart).Seconds())
 	}
 	now := time.Now()
 	p.publish(pipeline.EvUpstreamResponse, &pipeline.TrafficEvent{RequestID: reqID, Endpoint: endpoint, UpstreamResp: redactLogIf(upstreamSb.String(), p.logPII)})
@@ -552,6 +563,9 @@ func (p *Proxy) publish(ev string, data interface{}) { p.proc.Publish(ev, data) 
 // recordAudit 在请求收尾处记录一条结构化审计事件（契约 §9）。
 // outcome 由调用方按响应状态给出（success/blocked/error）；entries 为本次映射条目。
 func (p *Proxy) recordAudit(reqID, convID, endpoint, model string, stream bool, entries []types.MappingEntry, outcome, errorCode string, start time.Time) {
+	if p.m != nil {
+		p.m.RequestLatency.WithLabelValues(endpoint).Observe(time.Since(start).Seconds())
+	}
 	if p.proc == nil {
 		return
 	}

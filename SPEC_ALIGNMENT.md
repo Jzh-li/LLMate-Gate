@@ -252,7 +252,7 @@
 
 | # | 冲突 | 标注位置 | 方案与利弊（已写入标注） |
 |---|---|---|---|
-| C7 | Prometheus 指标命名/单位 | `gateway/internal/metrics/metrics.go` 包注释；`00` §14.2；`V1_READINESS` R4 | ① 改代码对齐 spec：规范统一，但**指标名是公共接口**，会破坏已对接的 Grafana/告警 ② 改 spec 承认现状：零破坏，seconds 也是 Prometheus 惯例单位，但需补录缺失项定义。**未改名** |
+| C7 | Prometheus 指标命名/单位 | `gateway/internal/metrics/metrics.go` 包注释；`00` §14.2；`V1_READINESS` R4 | ① 改代码对齐 spec：规范统一，但**指标名是公共接口**，会破坏已对接的 Grafana/告警 ② 改 spec 承认现状：零破坏，seconds 也是 Prometheus 惯例单位，但需补录缺失项定义。**未改名（spec §14.2 已于 2026-09-11 回写承认现状，与 metrics.go 对齐；指标名/单位维持现状）** |
 | C12d / Q12 | `rePlate` 车牌正则存在但未接线 | `gateway/internal/detector/regex.go`（rePlate 上方）；README 类型表 | ① 接线新增 `zh_plate`：扩检测面，但需补 ground truth 语料并重跑 bench ② 维持未接线 + 从 README 移除。**未动检测行为** |
 | C13 | CI 质量门缺失 | `.github/workflows/ci.yml` 顶部 | ① 补齐 lint/覆盖率门槛/vulncheck/-race/bench 回退：符合 spec，但新增失败面，刚修好的流水线有再红风险，且覆盖率需先建基线 ② 维持现状 + 回写 spec：零风险，但放弃护栏。**未改流水线行为** |
 | C16 | E4 断言弱于 spec | `e2e/e2e.sh` E4 上方 | ① 补 50ms 延迟断言：与 spec 一致，但 CI 机器上阈值不稳会偶发红 ② 维持幂等断言 + 回写 spec。**未改断言** |
@@ -261,7 +261,9 @@
 
 ### C. 未动 · 仍需你裁决或依赖外部输入
 
-Q3 / Q4（是否把豁免正式回写进 spec 验收标准）、Q7（指标命名方向）、Q9（debug 搬迁）、Q11（CI 门禁）、Q12（车牌接线）、Q13（bench 远程仓 URL，外部依赖）、Q14（Tauri vs systray）、Q15（真实对抗语料）、Q16（仿真替换默认启用）、Q17（workbuddy 字样与旧邮箱清理）。
+Q3 / Q4（是否把豁免正式回写进 spec 验收标准）、Q9（debug 搬迁）、Q11（CI 门禁）、Q12（车牌接线）、Q14（Tauri vs systray）、Q15（真实对抗语料）、Q16（仿真替换默认启用）、Q17（workbuddy 字样与旧邮箱清理）。
+
+> 注：Q7（指标命名方向，已采纳「② 改 spec 承认现状」）随 2026-09-11 `00` §14.2 回写已闭环；Q13（bench 远程仓 URL）随 2026-09-11 `bench/` 转 `cn-pii-bench` 子模块已闭环。
 
 ### C.1 2026-09-11 裁决收尾（10 项 Q-conflict 全部闭环）
 

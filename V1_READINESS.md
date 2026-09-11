@@ -109,7 +109,7 @@
 
 ## 结论
 
-**v1 主体可发布** —— **6/7** §16 标准明确达成（第 2 项已通过 `e2e/latency.sh` 多轮端到端压测收口、第 4 项属 v1.1）+ §13.1 多数目标实现 + §15 单元/基准层完整。**v1 阻塞项已全部解除**（LICENSE 已入库）。其余未完成项（Tauri / 打包 / 仿真替换默认 / 真实对抗语料 / 指标命名 / CI 质量门）属于 v1.1 或 Phase 4 收口的可选范围。
+**v1 主体可发布** —— **6/7** §16 标准明确达成（第 2 项已通过 `e2e/latency.sh` 多轮端到端压测收口、第 4 项属 v1.1）+ §13.1 多数目标实现 + §15 单元/基准层完整。**v1 阻塞项已全部解除**（LICENSE 已入库）。其余未完成项（Tauri / 打包 / 仿真替换默认 / 真实对抗语料 / CI 质量门）属于 v1.1 或 Phase 4 收口的可选范围。
 
 **建议下一步优先级**：
 
@@ -127,7 +127,7 @@
 | R1 | LICENSE | "v1 阻塞，需复核" | ✅ 已解除 | `LICENSE` 文件存在，commit `10f8d48` |
 | R2 | 透明代理 | "✅ Phase 3 commit `3aeadca`" | ❌ **未实现** | 全仓 grep 无 PAC/HTTPS_PROXY；`3aeadca` 实际内容是隐私端点+hooks+VS Code 扩展 |
 | R3 | §16 第 2 项 P99 | "✅ 达成（detect）" | ✅ **已收口** | 新增 `e2e/latency.sh` 多轮端到端压测：非流式 p99≈57ms（含 30ms 模拟上游）、流式 TTFT p99≈57ms、纯网关附加延迟中位≈1.4ms，均 < 2s（commit `5c68bb3`） |
-| R4 | Prometheus 指标 | "⚠️ 需核对" | ⚠️ **确实不一致** | `metrics.go` 实际名/单位与 `Specs/00` §14.2 对照（缺失 3 项 + 单位 seconds≠ms） |
+| R4 | Prometheus 指标 | "⚠️ 需核对" | ✅ **已对齐（方案②）** | `Specs/00` §14.2 已于 2026-09-11 回写承认现状：`metrics.go` 指标名为权威口径，缺失 4 项列为「规划中」；单位 seconds 为 Prometheus 惯例（commit `df00ea6` 后链路） |
 | R5 | CI 质量门 | 未评估 | 仅覆盖 vet/test/e2e/ui_smoke/bench 守门 | `ci.yml` 无 lint / 覆盖率门槛 / vulncheck / `-race` / bench 性能回退 |
 
 > 以上修订只改**状态判断与事实陈述**，未改动任何 Spec 验收标准本身。涉及改名/改 CI/改代码的行为一律**未执行**，留待你裁决（见 `SPEC_ALIGNMENT.md` Q7 / Q11）。

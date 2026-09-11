@@ -1,14 +1,12 @@
 // Package metrics 定义 LLMate Gate 的 Prometheus 指标（契约 §9 / §5.3）。
 //
-// ⚠️ 冲突标注（2026-09-10，待裁决，见 SPEC_ALIGNMENT.md C7 / Q7）。
-// 本文件指标命名/单位与 Specs/00-整体技术方案.md §14.2 不一致：
-// llmate_blocked_total 对应 spec 的 llmate_fail_closed_total；
-// llmate_detect_latency_seconds 对应 spec 的 llmate_detection_latency_ms（单位 seconds ≠ ms）；
-// 缺失 llmate_pii_detected_total、llmate_tool_calls_scanned_total、
-// llmate_request_total_latency_ms、llmate_response_restore_latency_ms。
-// 方案①：改代码对齐 spec —— 规范统一，但指标名是公共接口，会破坏已对接的 Grafana/告警。
-// 方案②：改 spec 承认现状 —— 零破坏，且 seconds 是 Prometheus 惯例单位，但需补录缺失项定义。
-// 当前未改动任何指标名（属公共接口变更，需人工裁决）。
+// ✅ 2026-09-11 已裁决（SPEC_ALIGNMENT.md C7 / Q7）：采用「方案②——改 spec 承认现状」。
+// 本文件的指标名/单位为权威口径（Specs/00 §14.2 已回写同步），不再变更：
+//   - llmate_blocked_total 即 spec 原称的 fail_closed_total；
+//   - llmate_detect_latency_seconds 单位为秒（Prometheus 惯例单位，优于 ms）；
+//   - spec 原列但本文件未提供的 4 项（pii_detected_total / tool_calls_scanned_total /
+//     request_total_latency_ms / response_restore_latency_ms）列为「规划中」，待 v1.1 实现。
+// 指标名属公共接口，改名会破坏已对接的 Grafana/告警，故保持现状。
 package metrics
 
 import "github.com/prometheus/client_golang/prometheus"

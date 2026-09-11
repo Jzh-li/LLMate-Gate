@@ -25,7 +25,7 @@ LLMate-Gate 是一个 LLM 网关中间件，反向代理 OpenAI 兼容接口，�
 | `gateway/debug/assets/` | Web 调试面板（`/_debug`，流量/Playground/规则/**审计** 4 个 Tab） |
 | `gateway/configs/` | YAML 配置（含冒烟模板 `smoke.yaml`，已 gitignore） |
 | `gateway/internal/audit/` | §9 结构化审计 + 内存环（最近 200 条） |
-| `bench/` | cn-pii-bench 评测子项目（**当前是普通子目录**，待转 submodule） |
+| `bench/` | cn-pii-bench 评测子项目（**已转 git submodule**，指向 github.com/Jzh-li/cn-pii-bench@main） |
 | `Specs/00-整体技术方案.md` | Spark 主方案，§15/§16 是验收线 |
 | `scripts/dev.sh` | dev loop 唯一入口（envcheck / sync / build / test / buildall） |
 | `PROGRESS.md` | 当前进度的总账（每次任务收口往这 append） |
@@ -34,7 +34,7 @@ LLMate-Gate 是一个 LLM 网关中间件，反向代理 OpenAI 兼容接口，�
 | `.workbuddy/memory/` | workbuddy 会话日志（gitignored，新会话自动读） |
 | `HANDOFF.md` | **本文件** |
 | `LICENSE` | Apache 2.0 全文 |
-| `cn-pii-bench` *(独立仓，`C:/Users/jzh-l/cn-pii-bench/`)* | 中文 PII 评测语料与评估器，独立仓，**等用户给 GitHub URL** |
+| `cn-pii-bench` *(github.com/Jzh-li/cn-pii-bench@main)* | 中文 PII 评测语料与评估器，**已作为 `bench/` submodule 关联**（commit `4ccd538`） |
 
 ---
 
@@ -244,3 +244,14 @@ git -c safe.directory='*' push origin main
 `.workbuddy/memory/` 路径与约定一致，workbuddy 会自动读取，作为补充上下文。
 
 如本会话被账号切换打断而**未推送**：`git stash` 当前改动 + `git -c safe.directory='*' push origin <branch>` 可挽救。
+
+---
+
+## 10. 近期收口记录（2026-09-11 晚）
+
+| 任务 | commit | 说明 |
+|---|---|---|
+| bench 转 cn-pii-bench 子模块 | `4ccd538` `7fb48a6` `970fb4a` | `bench/` 改为 git submodule（github.com/Jzh-li/cn-pii-bench@main，HTTPS URL）；ci.yml 的 bench / bench-baseline 两 job 加 `submodules: true` |
+| `--version` 命令行开关 | `6b922ac` | `main.go` 新增 `--version` / `-version`，打印 ldflags 注入的版本号后退出，供 scoop `post_install` 校验 |
+| 多轮端到端 P99 基准 harness | `5c68bb3` `df00ea6` | `e2e/latency.sh` + `e2e/latency_client.py`（仅 Python 标准库）；mock-llm 加 `-delay` 开关；收口 V1_READINESS R3（v1 验收 5/7 → 6/7） |
+| 指标对齐（方案② 改 spec 承认现状） | `fa1ac05` | `Specs/00` §14.2 回写为实现侧真实指标名（blocked/fail_closed、seconds 单位、补录多出指标、缺失 4 项列规划中）；metrics.go / SPEC_ALIGNMENT C7/Q7 / V1_READINESS R4 同步 |

@@ -1,0 +1,90 @@
+PASS
+ok  	gateway/internal/audit	0.007s
+goos: linux
+goarch: amd64
+pkg: gateway/internal/cache
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkMerkleFullMiss-2      	    2344	    461520 ns/op	   10270 B/op	     101 allocs/op
+BenchmarkMerkleFullMiss-2      	    4844	    246373 ns/op	   10282 B/op	     101 allocs/op
+BenchmarkMerkleFullMiss-2      	    4830	    258045 ns/op	   10306 B/op	     101 allocs/op
+BenchmarkMerkleFullMiss-2      	    4538	    250073 ns/op	   10274 B/op	     101 allocs/op
+BenchmarkMerkleFullMiss-2      	    4783	    250595 ns/op	   10299 B/op	     101 allocs/op
+BenchmarkMerkleFullMiss-2      	    4574	    249981 ns/op	   10281 B/op	     101 allocs/op
+BenchmarkMerkleIncremental-2   	   30336	     38750 ns/op	    2170 B/op	      25 allocs/op
+BenchmarkMerkleIncremental-2   	   30560	     39001 ns/op	    2170 B/op	      25 allocs/op
+BenchmarkMerkleIncremental-2   	   30344	     38847 ns/op	    2173 B/op	      25 allocs/op
+BenchmarkMerkleIncremental-2   	   30751	     39329 ns/op	    2175 B/op	      25 allocs/op
+BenchmarkMerkleIncremental-2   	   29799	     38548 ns/op	    2174 B/op	      25 allocs/op
+BenchmarkMerkleIncremental-2   	   29532	     38881 ns/op	    2173 B/op	      25 allocs/op
+PASS
+ok  	gateway/internal/cache	19.190s
+?   	gateway/internal/circuit	[no test files]
+PASS
+ok  	gateway/internal/config	0.004s
+goos: linux
+goarch: amd64
+pkg: gateway/internal/detector
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkRegexEngineDetect-2        	    4389	    261552 ns/op	    4112 B/op	      29 allocs/op
+BenchmarkRegexEngineDetect-2        	    4460	    261890 ns/op	    4137 B/op	      29 allocs/op
+BenchmarkRegexEngineDetect-2        	    4543	    265387 ns/op	    4120 B/op	      29 allocs/op
+BenchmarkRegexEngineDetect-2        	    4461	    263731 ns/op	    4129 B/op	      29 allocs/op
+BenchmarkRegexEngineDetect-2        	    4213	    264159 ns/op	    4112 B/op	      29 allocs/op
+BenchmarkRegexEngineDetect-2        	    4639	    303796 ns/op	    4120 B/op	      29 allocs/op
+BenchmarkRegexEngineDetectBatch-2   	     568	   2154364 ns/op	   33159 B/op	     233 allocs/op
+BenchmarkRegexEngineDetectBatch-2   	     558	   2086855 ns/op	   33096 B/op	     233 allocs/op
+BenchmarkRegexEngineDetectBatch-2   	     564	   2090143 ns/op	   33029 B/op	     233 allocs/op
+BenchmarkRegexEngineDetectBatch-2   	     566	   2110971 ns/op	   32963 B/op	     233 allocs/op
+BenchmarkRegexEngineDetectBatch-2   	     567	   2086212 ns/op	   32963 B/op	     233 allocs/op
+BenchmarkRegexEngineDetectBatch-2   	     567	   2092680 ns/op	   33094 B/op	     233 allocs/op
+PASS
+ok  	gateway/internal/detector	15.829s
+?   	gateway/internal/errors	[no test files]
+PASS
+ok  	gateway/internal/mcp	0.009s
+PASS
+ok  	gateway/internal/metrics	0.005s
+?   	gateway/internal/pipeline	[no test files]
+PASS
+ok  	gateway/internal/policy	0.004s
+PASS
+ok  	gateway/internal/proxy	0.004s
+goos: linux
+goarch: amd64
+pkg: gateway/internal/replacer
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkReplacerSessionReplace-2   	  591121	      2457 ns/op	    2864 B/op	      34 allocs/op
+BenchmarkReplacerSessionReplace-2   	  499360	      2245 ns/op	    2864 B/op	      34 allocs/op
+BenchmarkReplacerSessionReplace-2   	  497296	      2229 ns/op	    2864 B/op	      34 allocs/op
+BenchmarkReplacerSessionReplace-2   	  501618	      2256 ns/op	    2864 B/op	      34 allocs/op
+BenchmarkReplacerSessionReplace-2   	  470548	      2253 ns/op	    2864 B/op	      34 allocs/op
+BenchmarkReplacerSessionReplace-2   	  487712	      2295 ns/op	    2864 B/op	      34 allocs/op
+BenchmarkReplacerFullReplace-2      	  439860	      2385 ns/op	    2936 B/op	      37 allocs/op
+BenchmarkReplacerFullReplace-2      	  487698	      2386 ns/op	    2936 B/op	      37 allocs/op
+BenchmarkReplacerFullReplace-2      	  474355	      2432 ns/op	    2936 B/op	      37 allocs/op
+BenchmarkReplacerFullReplace-2      	  490407	      2445 ns/op	    2936 B/op	      37 allocs/op
+BenchmarkReplacerFullReplace-2      	  465292	      2394 ns/op	    2936 B/op	      37 allocs/op
+BenchmarkReplacerFullReplace-2      	  490050	      2399 ns/op	    2936 B/op	      37 allocs/op
+PASS
+ok  	gateway/internal/replacer	18.377s
+?   	gateway/internal/server	[no test files]
+PASS
+ok  	gateway/internal/simulator	0.004s
+goos: linux
+goarch: amd64
+pkg: gateway/internal/vault
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkVaultPutGet-2       	 1000000	      1832 ns/op	     799 B/op	      10 allocs/op
+BenchmarkVaultPutGet-2       	 1000000	      1630 ns/op	     799 B/op	      10 allocs/op
+BenchmarkVaultPutGet-2       	 1000000	      1688 ns/op	     799 B/op	      10 allocs/op
+BenchmarkVaultPutGet-2       	 1000000	      1628 ns/op	     799 B/op	      10 allocs/op
+BenchmarkVaultPutGet-2       	 1000000	      1643 ns/op	     799 B/op	      10 allocs/op
+BenchmarkVaultPutGet-2       	 1000000	      1685 ns/op	     799 B/op	      10 allocs/op
+BenchmarkVaultSealUnseal-2   	   83014	     14253 ns/op	    4777 B/op	      35 allocs/op
+BenchmarkVaultSealUnseal-2   	   81370	     14211 ns/op	    4777 B/op	      35 allocs/op
+BenchmarkVaultSealUnseal-2   	   81764	     14285 ns/op	    4777 B/op	      35 allocs/op
+BenchmarkVaultSealUnseal-2   	   80925	     14154 ns/op	    4777 B/op	      35 allocs/op
+BenchmarkVaultSealUnseal-2   	   81676	     14270 ns/op	    4777 B/op	      35 allocs/op
+BenchmarkVaultSealUnseal-2   	   81411	     14320 ns/op	    4777 B/op	      35 allocs/op
+PASS
+ok  	gateway/internal/vault	25.355s

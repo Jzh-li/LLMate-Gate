@@ -11,17 +11,14 @@ permissions:
   contents: read
 
 env:
-  GO_VERSION: '1.24'
+  GO_VERSION: '1.24.9'
   GOPROXY: https://proxy.golang.org,direct
 
-# ⚠️ 冲突标注（2026-09-10，待裁决，见 SPEC_ALIGNMENT.md C13 / Q11）：
-# 本流水线只覆盖 vet + go test + e2e + ui_smoke + bench 守门；与 Specs/03-测试规约.md §7.2 相比缺少：
-#   - Lint（golangci-lint）、-race、govulncheck
-#   - 覆盖率门槛判定（coverage job 只上传 artifact，不阻断；spec §5 要求逐包/整体门槛）
-#   - go test -bench 与 bench/baseline.txt 的性能回退（>10%）检测
-# 方案①：补齐门禁 —— 符合 spec，但会新增失败面；刚修复完的流水线有再次变红的风险，且覆盖率需先建立基线。
-# 方案②：维持现状 + 回写 spec —— 零风险，但放弃了护栏（覆盖率/性能回退无人把门）。
-# 当前未改动流水线行为（改动 CI 属可能影响现有功能，需人工裁决）。
+# ✅ 2026-09-12 已采纳「方案①——补齐门禁」（SPEC_ALIGNMENT C13 / Q11 收口）：
+#   - verify 加 -race
+#   - 新增 vuln（govulncheck）job
+#   - coverage 加门槛（total ≥ 35%，基线 41.9%）
+# 剩余：Lint（golangci-lint）、bench 性能回退 >10% 检测 —— 待 lint 配置就绪后再加。
 
 jobs:
   verify:
@@ -49,9 +46,9 @@ jobs:
         working-directory: gateway
         run: go vet ./...
 
-      - name: 单元 + 集成测试
+      - name: 单元 + 集成测试（含竞态检测）
         working-directory: gateway
-        run: go test -count=1 ./...
+        run: go test -count=1 -race ./...
 
   build:
     name: build binaries
@@ -137,6 +134,11 @@ jobs:
           go test -count=1 -coverprofile=coverage.out -covermode=atomic ./... 2>&1 | tee test.log
           go tool cover -func=coverage.out > coverage.txt
           grep -E '^total:' coverage.txt | tee coverage-total.txt
+          # 门槛：total ≥ 35%（基线 41.9%；留 7pct 缓冲供新功能不至于立刻变红）。
+          # 取百分比数字与 35.0 比较（awk 不做浮点也行——col 3 是去掉 % 的字符串）
+          pct=$(awk '/^total:/ {gsub("%","",$3); print $3}' coverage-total.txt)
+          awk -v p="$pct" 'BEGIN { exit (p+0 >= 35.0) ? 0 : 1 }' \
+            || (echo "::error::覆盖率 ${pct}% 跌破门槛 35%" && exit 1)
 
       - uses: actions/upload-artifact@v5
         with:
@@ -189,3 +191,25 @@ jobs:
         run: |
           CGO_ENABLED=0 go build -o ../build/bench-runner ./cmd/bench-runner
           ../build/bench-runner ../bench/fixtures/cases.jsonl
+
+  vuln:
+    name: govulncheck
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: gateway/go.sum
+
+      # govulncheck：扫描 Go 工具链已知漏洞。GO_VERSION=1.24.9 已修复 stdlib 漏洞；
+      # 仅当存在「可达」漏洞时非零退出（未调用的间接依赖漏洞不阻断）。
+      - name: 漏洞扫描
+        working-directory: gateway
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...

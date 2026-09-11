@@ -13,7 +13,7 @@ func TestLoggerRingRecent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new logger: %v", err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 
 	const n = 250
 	for i := 0; i < n; i++ {

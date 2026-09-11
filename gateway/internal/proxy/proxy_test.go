@@ -159,12 +159,6 @@ func collectStreamContent(t *testing.T, body string) string {
 	return sb.String()
 }
 
-func writeSSE(w http.ResponseWriter, f http.Flusher, payload string) {
-	_, _ = w.Write([]byte("data: " + payload + "\n\n"))
-	if f != nil {
-		f.Flush()
-	}
-}
 func mustParse(t *testing.T, raw string) *url.URL {
 	t.Helper()
 	u, err := url.Parse(raw)

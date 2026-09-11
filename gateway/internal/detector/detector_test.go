@@ -373,9 +373,7 @@ func TestRegexEngine_AddressAllForms(t *testing.T) {
 		{"autonomous_region", "地址：内蒙古自治区呼和浩特市新华大街50号", "内蒙古自治区呼和浩特市新华大街50号"},
 	}
 	e := NewRegexEngine()
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
+	for _, tc := range cases {		t.Run(tc.name, func(t *testing.T) {
 			resp, err := e.Detect(context.Background(), &types.DetectRequest{Text: tc.text})
 			require.NoError(t, err)
 			var saw bool

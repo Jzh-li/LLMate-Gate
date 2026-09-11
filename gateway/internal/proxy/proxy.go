@@ -400,7 +400,7 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, endpoint string,
 		writeError(w, gatewayerrors.Wrap(gatewayerrors.CodeUpstreamError, "upstream", err))
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	restorer := replacer.NewStreamRestorerFromEntries(entries)
 
@@ -771,7 +771,7 @@ func (p *Proxy) Passthrough(w http.ResponseWriter, r *http.Request) {
 		writeError(w, gatewayerrors.Wrap(gatewayerrors.CodeUpstreamError, "upstream passthrough", err))
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	copyHeaders(w.Header(), resp.Header)
 	w.Header().Del("Content-Length")
 	w.WriteHeader(resp.StatusCode)

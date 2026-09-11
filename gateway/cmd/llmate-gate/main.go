@@ -75,7 +75,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("vault init error: %v", err)
 	}
-	defer v.Close()
+	defer func() { _ = v.Close() }()
 	go v.StartSweeper(ctx, time.Minute)
 
 	// 检测引擎：regex（内置）或 pii-engineer（sidecar）。
@@ -163,7 +163,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("audit init error: %v", err)
 	}
-	defer alog.Close()
+	defer func() { _ = alog.Close() }()
 
 	// 指标。
 	reg := prometheus.NewRegistry()

@@ -67,7 +67,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("[mock-llm] open record-file: %v", err)
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 	}
 
 	commonHandler := func(label string, w http.ResponseWriter, r *http.Request) {
@@ -321,7 +321,7 @@ func handleEmbedding(w http.ResponseWriter, body []byte) {
 		Input interface{} `json:"input"`
 	}
 	_ = json.Unmarshal(body, &req)
-	items := []map[string]interface{}{}
+	var items []map[string]interface{}
 	if arr, ok := req.Input.([]interface{}); ok {
 		items = make([]map[string]interface{}, len(arr))
 		for i, x := range arr {

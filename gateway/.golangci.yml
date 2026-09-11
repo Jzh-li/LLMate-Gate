@@ -1,0 +1,24 @@
+# golangci-lint 配置 —— 保守规则集（v2 格式）
+# 设计原则：只开稳定、低误报的 linter；先本地清零再接 CI 门禁。
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  # 默认集之外显式补充；不启用的不写（避免跟版本默认集漂移）。
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - misspell
+    - unconvert
+    - copyloopvar
+
+issues:
+  # 单文件单 linter 上限放宽，避免大文件被截断后漏报
+  max-issues-per-linter: 50
+  max-same-issues: 10

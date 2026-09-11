@@ -59,7 +59,7 @@ func (c *PIIEngineerClient) Detect(ctx context.Context, req *types.DetectRequest
 	if err != nil {
 		return nil, mapTransportError(ctx, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return nil, gatewayerrors.Wrap(gatewayerrors.CodeDetectorUnavailable, "read detect response", err)
@@ -98,7 +98,7 @@ func (c *PIIEngineerClient) DetectBatch(ctx context.Context, reqs []*types.Detec
 	if err != nil {
 		return nil, mapTransportError(ctx, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 	if err != nil {
 		return nil, gatewayerrors.Wrap(gatewayerrors.CodeDetectorUnavailable, "read batch response", err)
@@ -132,7 +132,7 @@ func (c *PIIEngineerClient) Health(ctx context.Context) error {
 	if err != nil {
 		return gatewayerrors.Wrap(gatewayerrors.CodeDetectorUnavailable, "detector health check failed", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return gatewayerrors.Errorf(gatewayerrors.CodeDetectorUnavailable, "detector health status %d", resp.StatusCode)
 	}

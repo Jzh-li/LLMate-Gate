@@ -42,10 +42,9 @@ var (
 	rePhone    = regexp.MustCompile(`1[3-9][0-9]{9}`)
 	reIDCard18 = regexp.MustCompile(`[1-9][0-9]{5}(?:19|20)[0-9]{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12][0-9]|3[01])[0-9]{3}[0-9Xx]`)
 	reIDCard15 = regexp.MustCompile(`[1-9][0-9]{7}(?:0[1-9]|1[0-2])(?:0[1-9]|[12][0-9]|3[01])[0-9]{3}`)
-	reBankCard = regexp.MustCompile(`[0-9]{16,19}`)
 	// 国际信用卡（Visa/MC/Amex/Disc/JCB/UnionPay）：
 	// Visa 13/16/19, MasterCard 16, Amex 15, Disc 16, JCB 15-16, UPI 16-19。
-	// 范围放宽到 13-19，与 reBankCard 的 16-19 并存但起点低 3 位。
+	// 范围 13-19；zh_bank_card / credit_card 的区分由 cardDispatch 按 IIN 前缀 + Luhn 动态裁决。
 	reCreditCard = regexp.MustCompile(`[0-9]{13,19}`)
 	reEmail    = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)
 	reIPv4     = regexp.MustCompile(`(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])`)

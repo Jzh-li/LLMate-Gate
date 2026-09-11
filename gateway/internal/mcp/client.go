@@ -143,12 +143,7 @@ func (c *Client) Deanonymize(ctx context.Context, req DeanonymizeReq) (*Deanonym
 // ScanToolParams 预检式脱敏：复用 redact 端点，把结果包装成「是否含 PII + 脱敏样例」报告。
 // 与 anonymize 的区别仅在于返回形态（结构化扫描报告），底层同一映射表可后续还原。
 func (c *Client) ScanToolParams(ctx context.Context, req ScanReq) (*ScanResp, error) {
-	red, err := c.Anonymize(ctx, AnonymizeReq{
-		JSON:           req.JSON,
-		Text:           req.Text,
-		ConversationID: req.ConversationID,
-		Strategy:       req.Strategy,
-	})
+	red, err := c.Anonymize(ctx, AnonymizeReq(req))
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +192,7 @@ func (c *Client) post(ctx context.Context, path string, body, out interface{}) e
 	if err != nil {
 		return fmt.Errorf("call gateway %s: %w", path, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("gateway %s: status %d: %s", path, resp.StatusCode, string(raw))

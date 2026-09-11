@@ -34,21 +34,22 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
 
       - name: 跨平台编译
+        working-directory: gateway
         run: |
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
           [[ "$TAG" == "main" || -z "$TAG" ]] && TAG="dev"
-          mkdir -p dist
+          mkdir -p ../dist
           for t in "linux amd64" "linux arm64" "darwin amd64" "darwin arm64" "windows amd64 .exe" "windows arm64 .exe"; do
             read goos goarch ext <<<"$t"
-            out="dist/llmate-gate-${goos}-${goarch}${ext}"
+            out="../dist/llmate-gate-${goos}-${goarch}${ext}"
             echo "==> ${goos}/${goarch}"
             GOOS="$goos" GOARCH="$goarch" go build -trimpath \
               -ldflags "-s -w -X main.version=$TAG" \
-              -o "$out" ./gateway/cmd/llmate-gate
+              -o "$out" ./cmd/llmate-gate
           done
-          ( cd dist && sha256sum llmate-gate-* > SHA256SUMS )
-          cat dist/SHA256SUMS
+          ( cd ../dist && sha256sum llmate-gate-* > SHA256SUMS )
+          cat ../dist/SHA256SUMS
 
       - name: 创建 GitHub Release
         uses: softprops/action-gh-release@v2

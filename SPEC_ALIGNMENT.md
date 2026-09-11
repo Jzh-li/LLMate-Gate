@@ -254,7 +254,7 @@
 |---|---|---|---|
 | C7 | Prometheus 指标命名/单位 | `gateway/internal/metrics/metrics.go` 包注释；`00` §14.2；`V1_READINESS` R4 | ① 改代码对齐 spec：规范统一，但**指标名是公共接口**，会破坏已对接的 Grafana/告警 ② 改 spec 承认现状：零破坏，seconds 也是 Prometheus 惯例单位，但需补录缺失项定义。**未改名（spec §14.2 已于 2026-09-11 回写承认现状，与 metrics.go 对齐；指标名/单位维持现状）** |
 | C12d / Q12 | `rePlate` 车牌正则存在但未接线 | `gateway/internal/detector/regex.go`（rePlate 上方）；README 类型表 | ① 接线新增 `zh_plate`：扩检测面，但需补 ground truth 语料并重跑 bench ② 维持未接线 + 从 README 移除。**未动检测行为** |
-| C13 | CI 质量门缺失 | `.github/workflows/ci.yml` 顶部 | ① 补齐 lint/覆盖率门槛/vulncheck/-race/bench 回退：符合 spec，但新增失败面，刚修好的流水线有再红风险，且覆盖率需先建基线 ② 维持现状 + 回写 spec：零风险，但放弃护栏。**2026-09-12 已采纳方案①子集**：verify 加 `-race`、新增 govulncheck job、coverage 加 35% 门槛（基线 41.9%）；GO_VERSION 升 1.24.9 修复 25 个 stdlib 漏洞。**剩余未做**：lint（golangci-lint 配置待就绪）、bench 性能回退 >10% 检测。 |
+| C13 | CI 质量门缺失 | `.github/workflows/ci.yml` 顶部 | ① 补齐 lint/覆盖率门槛/vulncheck/-race/bench 回退：符合 spec，但新增失败面，刚修好的流水线有再红风险，且覆盖率需先建基线 ② 维持现状 + 回写 spec：零风险，但放弃护栏。**2026-09-12 已全部采纳方案①**：verify `-race`、`vuln` job（govulncheck）、`lint` job（golangci-lint，规则集 `gateway/.golangci.yml`，本地已清零）、coverage 总计 ≥35% + 逐包 ≥基线-5pct 门槛、`perf` job（8 个 Go benchmark + `scripts/bench-guard.sh` 回退守门，min-of-6 容差 1.25×，首跑自举基线）；GO_VERSION 升 1.24.9 修复 25 个 stdlib 漏洞。 |
 | C16 | E4 断言弱于 spec | `e2e/e2e.sh` E4 上方 | ① 补 50ms 延迟断言：与 spec 一致，但 CI 机器上阈值不稳会偶发红 ② 维持幂等断言 + 回写 spec。**未改断言** |
 | C3 | PII Engineer 需求 vs 实现 | `00` §11 表头注记；`01` 任务 1.2 注记 | ① 维持暂缓 + 标注（不阻塞 v1；代价是弱格式实体召回受正则上限）② 立即排期（620MB 模型 + Rust 工具链数日，且合成维度会拉低 F1、延迟×6）。**未删 spec 的集成要求**，保留触发条件：真实语料召回 <85% |
 | C9 | debug 包是否搬迁 | `DECISIONS.md` D004 更正段（代码未动） | ① 改文档承认现状（零风险）② 搬回 `internal/debug`（需改 go:embed + 构建脚本 + 全部 import） |
@@ -278,7 +278,7 @@ Q3 / Q4（是否把豁免正式回写进 spec 验收标准）、Q9（debug 搬�
 | Q4 | ① 改验收标准（永久豁免） | C4；用户已豁免四方基准 | 在 01 任务 0.2 注记基础上，验收标准正文追加「Q4 豁免」脚注（待补） |
 | Q7 | ② 改 spec 承认现状 | C7；指标名是公共接口，改名会破坏已对接 Grafana/告警 | spec §14.2 加注「以现状 seconds 为准」，不改名 |
 | Q9 | ① 改文档承认现状 | C9；`gateway/debug/` 现状与 UI §1.2 / 附录 D 一致 | DECISIONS D004 已更正；无需搬代码 |
-| Q11 | ② 补齐门禁（采纳子集） | C13；覆盖率只上传不阻断 + 无 lint/vulncheck | 2026-09-12 落地：`verify` 加 `-race`、新增 `vuln` job（govulncheck）、coverage 总计 ≥35% 门槛（基线 41.9%）；GO_VERSION 升 `1.24.9` 修复 25 个 stdlib 漏洞。lint（golangci-lint）与 bench 性能回退 >10% 检测暂未做。 |
+| Q11 | ② 补齐门禁（已全部落地） | C13；覆盖率只上传不阻断 + 无 lint/vulncheck | 2026-09-12 落地：`verify` 加 `-race`、新增 `vuln` job（govulncheck）、`lint` job（golangci-lint）、coverage 总计 ≥35% + 逐包 ≥基线-5pct、`perf` job（benchmark 回退守门）；GO_VERSION 升 `1.24.9` 修复 25 个 stdlib 漏洞。CI 门禁至此全部就位。 |
 | Q12 | ① 接线车牌并补单测 | `rePlate` 已接线为 `plate` 类型（commit `c70542c`） | **已落地**：pkg/types + regex + bench 全过 |
 | Q14 | ② 先 Go systray minimal → 再 Tauri | 用户 2026-09 拍板「先 Go systray minimal」 | Phase 4 路径锁定为 B→A 渐进 |
 | Q15 | ① 构造 500+ 条真实对抗语料 | 决定 PII Engineer ROI 是否反转（DECISION §6） | 决策已定；执行 = T6（延后，待 v0.2） |

@@ -260,6 +260,18 @@ git -c safe.directory='*' push origin main
 
 | 任务 | commit | 说明 |
 |---|---|---|
-| A2 补齐 4 个缺失 Prometheus 指标 | 待提交 | `metrics.go` 新增 `llmate_pii_detected_total{entity_type,fate}`、`llmate_tool_calls_scanned_total`、`llmate_request_total_latency_seconds{endpoint}`、`llmate_response_restore_latency_seconds{endpoint}`；接线：recordReplace（PIIDetected）、transform/anonymizeJSONString 改 *Proxy 方法（ToolCallsScanned）、recordAudit（RequestLatency）、fullResponse/streamResponse（RestoreLatency）；新增 metrics_test.go（注册 + 写入）和 TestProxy_MetricsIntegration 端到端；`Specs/00` §14.2 规划中 4 项已移除 |
-| A1 CI 质量门（子集） | 待提交 | ci.yml: GO_VERSION `1.24.9`（修 25 个 stdlib 漏洞）；verify 加 `-race`；新增 `vuln` job（govulncheck）；coverage job 加 ≥35% 门槛（基线 41.9%）。**未做**：lint（golangci-lint 配置待就绪）、bench 性能回退 >10% 检测 |
-| TODO_QUEUE 清理 | 待提交 | 移除已闭环卡点；B 组落地后从打包脚本卡移除；新增「桌面 UI 计划任务/快捷方式」卡（替代 systray，因 CGO 冲突已放弃 systray） |
+| A2 补齐 4 个缺失 Prometheus 指标 | `a7fe259` | `metrics.go` 新增 `llmate_pii_detected_total{entity_type,fate}`、`llmate_tool_calls_scanned_total`、`llmate_request_total_latency_seconds{endpoint}`、`llmate_response_restore_latency_seconds{endpoint}`；接线：recordReplace（PIIDetected）、transform/anonymizeJSONString 改 *Proxy 方法（ToolCallsScanned）、recordAudit（RequestLatency）、fullResponse/streamResponse（RestoreLatency）；新增 metrics_test.go（注册 + 写入）和 TestProxy_MetricsIntegration 端到端；`Specs/00` §14.2 规划中 4 项已移除 |
+| A1 CI 质量门（子集） | `b1a2d27` | ci.yml: GO_VERSION `1.24.9`（修 25 个 stdlib 漏洞）；verify 加 `-race`；新增 `vuln` job（govulncheck）；coverage job 加 ≥35% 门槛（基线 41.9%） |
+| 文档同步 | `c38689e` | spec §14.2 / SPEC_ALIGNMENT C13·Q11 / HANDOFF 同步 |
+| TODO_QUEUE 清理 | 本地（gitignored） | 移除已闭环卡点；新增「桌面 UI 计划任务/快捷方式」卡（替代 systray，因 CGO 冲突已放弃 systray） |
+
+## 12. 近期收口记录（2026-09-12，质量门禁四连 + 桌面集成验证）
+
+| 任务 | commit | 说明 |
+|---|---|---|
+| install.ps1 修复 + 真机验证 | `0cea49b` | 无 BOM 含中文 ps1 在 Win PS 5.1 下按 ANSI 误读导致语法错误（实际执行必挂）——加 UTF-8 BOM 后 AST 解析 0 错误；Do-Uninstall 补删桌面 LNK。真机冒烟：`-NoAutostart` 安装（目录/配置/快捷方式）+ `-Uninstall` 完整循环通过。桌面集成三平台脚本就此验证收口 |
+| golangci-lint 清零 + lint job | `c35dbe8` | 新增 `gateway/.golangci.yml`（errcheck/govet/staticcheck/unused/ineffassign/misspell/unconvert/copyloopvar）；清零 19 处告警（10×defer Close、死正则 reBankCard、writeSSE、S1016 结构转换、5×copyloopvar、1×ineffassign）；本地 golangci-lint v2 复跑 0 issues |
+| Go benchmark + perf 守门 | `2629802` | 8 个基准覆盖 detector/cache/vault/replacer 热路径（真实 RegexEngine 非 stub）；`scripts/bench-guard.sh`：min-of-6 ns/op，容差 1.25×，三场景本地验证 |
+| CI 三道新门禁 | `9c59657` | ci.yml 新增 `lint` job（golangci-lint 官方 CLI）与 `perf` job（首跑自举生成 `gateway/bench_baseline.txt` 并回写，下轮起比对）；coverage job 加逐包门槛（12 包按实测基线-5pct 设卡）。spec §1.3 高线记 v1.1 目标 |
+
+> 至此 CI 门禁全部就位：verify(-race) / build / e2e / coverage(总计+逐包) / bench / bench-baseline / lint / perf / vuln 九个 job。

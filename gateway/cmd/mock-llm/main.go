@@ -43,12 +43,15 @@ type requestRecord struct {
 	At     time.Time       `json:"at"`
 }
 
+// genDelay 模拟上游「首字延迟」，由 -delay 注入；包级变量供 genThink 读取。
+var genDelay = flag.Duration("delay", 0, "simulated upstream generation/think delay before first byte (e.g. 200ms); 0 = instant")
+
 func main() {
 	var (
-		listen       = flag.String("listen", ":8999", "mock LLM listen address")
-		record       = flag.Bool("record", false, "record last request body to /_received")
-		recordFile   = flag.String("record-file", "", "append-mode file path to record every received body (JSON lines)")
-		dumpRequest  = flag.Bool("dump-headers", false, "echo all request headers in response")
+		listen      = flag.String("listen", ":8999", "mock LLM listen address")
+		record      = flag.Bool("record", false, "record last request body to /_received")
+		recordFile  = flag.String("record-file", "", "append-mode file path to record every received body (JSON lines)")
+		dumpRequest = flag.Bool("dump-headers", false, "echo all request headers in response")
 	)
 	flag.Parse()
 
@@ -200,6 +203,7 @@ func jsonLiteral(v interface{}) ([]byte, error) {
 // stream=false: 一次性返回 {choices:[{message:{role:"assistant", content:回显}}]}
 // stream=true:  返回 SSE 事件序列，每行一段增量 + DONE
 func handleChat(w http.ResponseWriter, r *http.Request, body []byte, dumpHeaders bool) {
+	genThink()
 	var req struct {
 		Model    string `json:"model"`
 		Messages []struct {
@@ -266,9 +270,16 @@ func handleChat(w http.ResponseWriter, r *http.Request, body []byte, dumpHeaders
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// genThink 模拟上游「首字延迟」：在生成任何响应字节前休眠 genDelay。
+// -delay=0（默认）时不休眠，保持与现有 e2e.sh 行为完全一致。
+func genThink() {
+	if genDelay != nil && *genDelay > 0 {
+		time.Sleep(*genDelay)
+	}
+}
+
 // chunkTokens 朴素分词：按 rune 切块 size，每块作为一个 SSE delta。
-func chunkTokens(s string, size int) []string {
-	if size <= 0 {
+func chunkTokens(s string, size int) []string {	if size <= 0 {
 		size = 1
 	}
 	out := make([]string, 0, (len([]rune(s))+size-1)/size)
@@ -284,6 +295,7 @@ func chunkTokens(s string, size int) []string {
 }
 
 func handleCompletion(w http.ResponseWriter, body []byte) {
+	genThink()
 	var req struct {
 		Model string `json:"model"`
 		Prompt string `json:"prompt"`
@@ -325,6 +337,7 @@ func handleEmbedding(w http.ResponseWriter, body []byte) {
 }
 
 func handleResponses(w http.ResponseWriter, body []byte) {
+	genThink()
 	echo := extractContent(body)
 	if echo == "" {
 		echo = "(empty)"
@@ -340,6 +353,7 @@ func handleResponses(w http.ResponseWriter, body []byte) {
 
 // handleAnthropic /v1/messages 回声消息 content，支持 stream=true（SSE event:content_block_delta）。
 func handleAnthropic(w http.ResponseWriter, r *http.Request, body []byte) {
+	genThink()
 	var req struct {
 		Model  string `json:"model"`
 		Stream bool   `json:"stream"`

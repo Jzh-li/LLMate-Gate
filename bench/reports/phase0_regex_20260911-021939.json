@@ -1,0 +1,121 @@
+{
+  "engine": "regex",
+  "endpoint": "http://127.0.0.1:8401/_api/detect",
+  "cases": "bench\\fixtures\\cases.jsonl",
+  "n": 240,
+  "timestamp": "20260911-021939",
+  "metrics": {
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0
+  },
+  "latency_ms": {
+    "p50": 14,
+    "p95": 16,
+    "p99": 25,
+    "max": 26,
+    "mean": 10
+  },
+  "per_type": {
+    "zh_person_name": {
+      "tp": 60,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "zh_phone": {
+      "tp": 103,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "zh_id_card": {
+      "tp": 67,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "zh_bank_card": {
+      "tp": 35,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "zh_address": {
+      "tp": 60,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "email": {
+      "tp": 35,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    }
+  },
+  "per_subset": {
+    "person_name": {
+      "tp": 30,
+      "fp": 0,
+      "fn": 0,
+      "n": 30
+    },
+    "phone": {
+      "tp": 30,
+      "fp": 0,
+      "fn": 0,
+      "n": 30
+    },
+    "id_card": {
+      "tp": 30,
+      "fp": 0,
+      "fn": 0,
+      "n": 30
+    },
+    "bank_card": {
+      "tp": 30,
+      "fp": 0,
+      "fn": 0,
+      "n": 30
+    },
+    "address": {
+      "tp": 30,
+      "fp": 0,
+      "fn": 0,
+      "n": 30
+    },
+    "tool_call": {
+      "tp": 60,
+      "fp": 0,
+      "fn": 0,
+      "n": 30
+    },
+    "mixed": {
+      "tp": 120,
+      "fp": 0,
+      "fn": 0,
+      "n": 30
+    },
+    "adversarial": {
+      "tp": 30,
+      "fp": 0,
+      "fn": 0,
+      "n": 30
+    }
+  },
+  "fp_items": [],
+  "fn_items": []
+}

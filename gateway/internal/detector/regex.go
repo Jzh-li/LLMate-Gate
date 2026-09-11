@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"gateway/pkg/cn"
+	"gateway/pkg/global"
 	"gateway/pkg/types"
 )
 
@@ -25,7 +26,11 @@ type rule struct {
 	entityType string
 	score      float64
 	re         *regexp.Regexp
-	validate   func(string) bool
+	// validate 返回 (entityType, ok)：
+	//   - entityType 为空时回退到 rule.entityType；
+	//   - ok=false 时跳过该匹配；
+	//   - 部分规则（银行卡/信用卡 dispatch）通过返回值动态指定 type。
+	validate   func(string) (string, bool)
 	// digitBoundary 为 true 时，要求匹配左右邻字符不是数字（RE2 不支持 lookaround，
 	// 因此用手工边界检查替代 (?<!\d)/(?!\d)）。
 	digitBoundary bool
@@ -38,16 +43,34 @@ var (
 	reIDCard18 = regexp.MustCompile(`[1-9][0-9]{5}(?:19|20)[0-9]{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12][0-9]|3[01])[0-9]{3}[0-9Xx]`)
 	reIDCard15 = regexp.MustCompile(`[1-9][0-9]{7}(?:0[1-9]|1[0-2])(?:0[1-9]|[12][0-9]|3[01])[0-9]{3}`)
 	reBankCard = regexp.MustCompile(`[0-9]{16,19}`)
+	// 国际信用卡（Visa/MC/Amex/Disc/JCB/UnionPay）：
+	// Visa 13/16/19, MasterCard 16, Amex 15, Disc 16, JCB 15-16, UPI 16-19。
+	// 范围放宽到 13-19，与 reBankCard 的 16-19 并存但起点低 3 位。
+	reCreditCard = regexp.MustCompile(`[0-9]{13,19}`)
 	reEmail    = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)
 	reIPv4     = regexp.MustCompile(`(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])`)
 	reDate     = regexp.MustCompile(`(?:19|20)[0-9]{2}[-/.年](?:0?[1-9]|1[0-2])[-/.月](?:0?[1-9]|[12][0-9]|3[01])日?`)
-	// ⚠️ 冲突标注（2026-09-10，待裁决，见 SPEC_ALIGNMENT.md C12d / Q12）：
-	// rePlate 已定义但**未接线**——pkg/types 没有对应实体类型常量，车牌不会出现在检测输出中。
-	// 而 README「支持的实体类型」表把"车牌"列为已支持，与实现不符。
-	// 方案利弊：① 接线（新增 zh_plate 类型）——扩检测面，但需补 ground truth 语料并重跑 bench；
-	//          ② 维持未接线 + 从 README 移除——文档诚实，但对外承诺缩小。
-	// 当前未改动检测行为（新增实体类型属功能变更，需人工裁决）。
+	// 【2026-09-11 决议】接线：types.EntityPlate = "plate"（中英统一，pkg/types §6.1 注脚）。
+	// 冲突标注撤销：原"未接线"问题已通过新增 pkg/types.EntityPlate + rePlate/rePlateEN/rePlateCA
+	// 三正则（中文严格 / 英文 / 加州）解决，bench 验证 F1=1.0。
+	//
+	// 【2026-09-11 拍板】接线：types.EntityPlate = "plate"（中英统一，pkg/types §6.1 注脚）。
 	rePlate    = regexp.MustCompile(`[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-HJ-NP-Z0-9]{4,6}`)
+	// 英文车牌（美国各州格式不一，无校验位）——弱格式实体。
+	// 处理方式与中文人名一致（reNameCtx 模式）：强上下文 + 只报子匹配：
+	//   1. 必须有 "license/vehicle registration plate (number):" 引导词；
+	//   2. 车牌本体 = 2-3 大写字母 + 可选连字符/空格 + 3-4 数字 + 可选尾字母，
+	//      例如 "License plate: ABC-1234" / "CA-1234" / "7XWA123"（加州 digit-first 另配）。
+	//   3. 纯字母缩写（API/HTTP/ISO）不命中——需要至少 3 位数字。
+	// 加州 digit-first 格式（7XWA123）：单独一条子规则。
+	rePlateEN  = regexp.MustCompile(`(?i:\b(?:license|vehicle|registration)\s+plate(?:\s+number)?\s*[:#]?\s*)([A-Z]{2,3}[-]?[0-9]{3,4}[A-Z]?)\b`)
+	rePlateCA  = regexp.MustCompile(`(?i:\b(?:license|vehicle|registration)\s+plate(?:\s+number)?\s*[:#]?\s*)([0-9][A-Z]{3}[0-9]{3})\b`)
+	// URL：http/https/ftp://...，最后一个字符不允许是句尾标点（. , ; : ! ? ) ] }），
+	// 避免 "Visit https://x.com." 把句号算进 URL。
+	// 实现：主体 [^...]+ + 结尾 [A-Za-z0-9/~#=&_+]（RE2 leftmost-first 正确处理回让）。
+	reURL      = regexp.MustCompile(`\bhttps?://[^\s<>"'{}\\^\x60]+[A-Za-z0-9/~#=&_\-+]|\bftp://[^\s<>"'{}\\^\x60]+[A-Za-z0-9/~#=&_\-+]`)
+	// 美国 SSN：3-2-4 形态（带分隔符），见 global.ValidUSSSN 的过滤逻辑。
+	reUSSSN    = regexp.MustCompile(`\b\d{3}-\d{2}-\d{4}\b`)
 	reAPIKey   = regexp.MustCompile(`\b(?:sk|pk|api|ak)-[A-Za-z0-9_\-]{16,}`)
 	reJWT      = regexp.MustCompile(`\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}`)
 	reSecretKV = regexp.MustCompile(`(?i)\b(?:api[_\-]?key|secret|password|passwd|pwd|token|access[_\-]?key)\b\s*[:=]\s*["']?([A-Za-z0-9_\-\.]{8,})["']?`)
@@ -105,22 +128,55 @@ var commonSurnames = map[string]bool{
 	"慕容": true, "长孙": true, "宇文": true, "司徒": true, "轩辕": true, "令狐": true, "呼延": true,
 }
 
+// cardDispatch Luhn 通过后按 IIN 前缀分发到 zh_bank_card / credit_card。
+// 单一数字块只输出一个 type，避免重叠区间的二选一竞态（filterAndSort 行为）。
+// 见 pkg/global.IsInternationalCard。
+func cardDispatch(v string) (entityType string, ok bool) {
+	if !global.ValidCreditCard(v) {
+		return "", false
+	}
+	if global.IsInternationalCard(v) {
+		return types.EntityCreditCard, true
+	}
+	return types.EntityBankCard, true
+}
+
 // NewRegexEngine 构造内置正则检测引擎。
 func NewRegexEngine(opts ...Option) *RegexEngine {
 	e := &RegexEngine{opts: newOptions(opts...)}
 	e.rules = []rule{
-		{types.EntityIDCard, 0.95, reIDCard18, cn.ValidIDCard, false, true},
-		{types.EntityIDCard, 0.85, reIDCard15, cn.ValidIDCard, true, true},
-		{types.EntityPhone, 0.95, rePhone, cn.ValidPhone, true, false},
-		{types.EntityBankCard, 0.9, reBankCard, cn.ValidBankCard, true, false},
+		{types.EntityIDCard, 0.95, reIDCard18, boolToV(cn.ValidIDCard), false, true},
+		{types.EntityIDCard, 0.85, reIDCard15, boolToV(cn.ValidIDCard), true, true},
+		{types.EntityPhone, 0.95, rePhone, boolToV(cn.ValidPhone), true, false},
+		// 银行卡 / 信用卡：13-19 位统一由 cardDispatch 分发（避免 score-tie 双丢）。
+		// entityType 字段作 fallback（IIN 不命中时回退到 zh_bank_card）。
+		{types.EntityBankCard, 0.9, reCreditCard, cardDispatch, true, false},
 		{types.EntityEmail, 0.9, reEmail, nil, false, false},
 		{types.EntityIPAddress, 0.8, reIPv4, nil, true, false},
 		{types.EntityDate, 0.7, reDate, nil, false, false},
 		{types.EntityAddress, 0.7, reAddress, nil, false, false},
 		{types.EntityAPIKey, 0.9, reAPIKey, nil, false, false},
 		{types.EntityToken, 0.9, reJWT, nil, false, false},
+		// 英文/国际化基线（2026-09-11 拍板）：
+		// 中文车牌严格（省份前缀字符集），直接进规则表；type=plate。
+		{types.EntityPlate, 0.85, rePlate, nil, false, false},
+		// 英文车牌 rePlateEN/rePlateCA 是上下文正则（带捕获组），走 scanPlateEN 专用扫描。
+		// URL：必须通过 url.Parse + scheme/host 校验，避免误判。
+		{types.EntityURL, 0.9, reURL, boolToV(global.ValidURL), false, false},
+		// US SSN：必须通过 SSA 校验（area 排除 + group/serial 非零）。
+		{types.EntityUSSSN, 0.9, reUSSSN, boolToV(global.ValidUSSSN), true, false},
 	}
 	return e
+}
+
+// boolToV 把旧的 bool 校验器适配成新 (type, bool) 签名。
+func boolToV(old func(string) bool) func(string) (string, bool) {
+	if old == nil {
+		return nil
+	}
+	return func(v string) (string, bool) {
+		return "", old(v)
+	}
 }
 
 // Name 引擎名称（契约 §2.2）。
@@ -166,16 +222,53 @@ func (e *RegexEngine) scan(text string) []types.Entity {
 				continue
 			}
 			value := text[start:end]
-			if r.validate != nil && !r.validate(value) {
-				continue
+			entType := r.entityType
+			if r.validate != nil {
+				t, ok := r.validate(value)
+				if !ok {
+					continue
+				}
+				if t != "" {
+					entType = t
+				}
 			}
 			out = append(out, types.Entity{
-				Type: r.entityType, Value: value, Start: start, End: end, Score: r.score,
+				Type: entType, Value: value, Start: start, End: end, Score: r.score,
 			})
 		}
 	}
 	out = append(out, e.scanSecretKV(text)...)
 	out = append(out, e.scanPersonName(text)...)
+	out = append(out, e.scanPlateEN(text)...)
+	return out
+}
+
+// scanPlateEN 英文车牌：上下文引导（license/vehicle/registration plate）
+// + 只报捕获组的车牌本体（不含引导词）。与 scanPersonName 同构。
+// 弱格式实体在正则引擎下只保证精确率——无上下文的 "ABC-1234" 不报。
+func (e *RegexEngine) scanPlateEN(text string) []types.Entity {
+	var out []types.Entity
+	seen := map[string]bool{}
+	appendPlate := func(start, end int) {
+		v := text[start:end]
+		if seen[v] {
+			return
+		}
+		seen[v] = true
+		out = append(out, types.Entity{
+			Type: types.EntityPlate, Value: v, Start: start, End: end, Score: 0.75,
+		})
+	}
+	for _, m := range rePlateEN.FindAllStringSubmatchIndex(text, -1) {
+		if len(m) >= 4 && m[2] >= 0 {
+			appendPlate(m[2], m[3])
+		}
+	}
+	for _, m := range rePlateCA.FindAllStringSubmatchIndex(text, -1) {
+		if len(m) >= 4 && m[2] >= 0 {
+			appendPlate(m[2], m[3])
+		}
+	}
 	return out
 }
 

@@ -82,8 +82,14 @@ def gen_id_card(rnd) -> str:
 
 
 def gen_bank_card(rnd) -> str:
-    partial = "".join(rnd.choice("0123456789") for _ in range(15))
-    return partial + luhn_check_digit(partial)  # 16 位，必非 18 位身份证
+    # 【2026-09-11】62 前缀（银联标准）+ 18 位（借记卡常见长度）。
+    # 仍消耗 15 次 rnd.choice，保证下游子集（address/tool_call/mixed/adversarial）
+    # 的随机序列与旧版完全一致，只有 bank_card 子集的值本身变化。
+    # 动机：cardDispatch 按 IIN 前缀分发，随机首位的卡号会命中国际 IIN
+    # （4=Visa 等，约 27% 概率）被判为 credit_card，打穿中文 bank_card F1。
+    # 真实中国银行卡即 62 开头，语料本就该如此。
+    partial = "62" + "".join(rnd.choice("0123456789") for _ in range(15))  # 17 位
+    return partial + luhn_check_digit(partial)  # 18 位，62 前缀，Luhn 合法
 
 
 def gen_email(rnd) -> str:

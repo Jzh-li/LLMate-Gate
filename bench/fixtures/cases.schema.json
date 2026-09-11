@@ -12,7 +12,7 @@
           "type": "object",
           "required": ["type", "value", "start", "end"],
           "properties": {
-            "type": {"enum": ["zh_person_name", "zh_phone", "zh_id_card", "zh_bank_card", "zh_address", "email", "ip_address", "date", "api_key", "token", "password"]},
+            "type": {"enum": ["zh_person_name", "zh_phone", "zh_id_card", "zh_bank_card", "zh_address", "email", "ip_address", "date", "api_key", "token", "password", "plate", "url", "us_ssn", "credit_card"]},
             "value": {"type": "string"},
             "start": {"type": "integer"},
             "end": {"type": "integer"}

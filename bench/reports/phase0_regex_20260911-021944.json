@@ -1,0 +1,109 @@
+{
+  "engine": "regex",
+  "endpoint": "http://127.0.0.1:8401/_api/detect",
+  "cases": "bench\\fixtures\\cases_en.jsonl",
+  "n": 180,
+  "timestamp": "20260911-021944",
+  "metrics": {
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0
+  },
+  "latency_ms": {
+    "p50": 14,
+    "p95": 16,
+    "p99": 22,
+    "max": 23,
+    "mean": 9
+  },
+  "per_type": {
+    "us_ssn": {
+      "tp": 60,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "credit_card": {
+      "tp": 60,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "url": {
+      "tp": 60,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "plate": {
+      "tp": 90,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "email": {
+      "tp": 30,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "ip_address": {
+      "tp": 30,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    }
+  },
+  "per_subset": {
+    "us_ssn": {
+      "tp": 30,
+      "fp": 0,
+      "fn": 0,
+      "n": 30
+    },
+    "credit_card": {
+      "tp": 30,
+      "fp": 0,
+      "fn": 0,
+      "n": 30
+    },
+    "url": {
+      "tp": 30,
+      "fp": 0,
+      "fn": 0,
+      "n": 30
+    },
+    "plate_en": {
+      "tp": 30,
+      "fp": 0,
+      "fn": 0,
+      "n": 30
+    },
+    "plate_zh": {
+      "tp": 30,
+      "fp": 0,
+      "fn": 0,
+      "n": 30
+    },
+    "mixed": {
+      "tp": 180,
+      "fp": 0,
+      "fn": 0,
+      "n": 30
+    }
+  },
+  "fp_items": [],
+  "fn_items": []
+}

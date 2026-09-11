@@ -307,16 +307,25 @@ Agent 调用工具时发出的参数：
 | 组织机构 | 公司/机构名 | 北京科技有限公司 |
 | IP / URL / 日期 / 金额 / 邮编 | 标准格式 | - |
 
-> ⚠️ **冲突标注（2026-09-10 核对）**：上表是**产品规划目标**；当前代码实现（`gateway/pkg/types/detect.go`）的实体类型常量只有 **11 个**：
-> `zh_person_name` / `zh_phone` / `zh_id_card` / `zh_bank_card` / `zh_address` / `email` / `ip_address` / `date` / `api_key` / `password` / `token`。
-> 其中 **组织机构 / URL / 金额 / 邮编未实现**；**车牌正则 `rePlate` 已存在于 `internal/detector/regex.go`，但没有对应的类型常量、不参与输出**（见该文件注释处的冲突标注）。
-> 两方案利弊：① **接线车牌 + 补齐类型**（扩检测面，但每个新类型都需 ground truth 与 bench 重跑）；② **从 README 移除未实现类型**（文档诚实，但缩小对外承诺）。当前仅标注，未擅自改动检测行为。
+> **2026-09-11 更新**：车牌（中英统一类型 `plate`，含 `License plate: ABC-1234` 上下文识别）、URL（`url`）、US SSN（`us_ssn`）、国际信用卡（`credit_card`，IIN 前缀识别 Visa/MasterCard/Amex/Discover/JCB）已接线并进入检测输出。双语基准 F1 = 1.0（中文 240 条零回归 + 英文 180 条，报告见 `bench/reports/`）。
+> **组织机构 / 金额 / 邮编仍未实现**。当前类型常量表见 `gateway/pkg/types/detect.go`。
 
-### 国际化实体
+### 国际化实体（英文基线，2026-09-11 起）
 
-PII Engineer 支持 13+ 语言：English, Malay, Tamil, Chinese, Indonesian, Vietnamese, Thai, Hindi, Bengali, Korean, Japanese, German, French, Spanish, Portuguese, Russian, Arabic, Turkish, Polish, Dutch, Italian, Swedish 等 35+ 语言。
+内置正则引擎 `detection.engine=regex` 除中文实体外，同时覆盖以下英文/国际类型：
 
-> ⚠️ **未兑现**：上述多语言能力来自 PII Engineer（尚未集成，见 `DECISIONS.md D001` 与 `DECISION.md`）。当前默认引擎为内置中文正则 `detection.engine=regex`，**仅覆盖上表 11 类**。
+| 类型 | 格式 | 示例 |
+| --- | --- | --- |
+| 英文车牌 | license/plate 上下文引导 | License plate: ABC-1234 |
+| URL | http/https/ftp + scheme/host 校验 | https://example.com/path |
+| US SSN | AAA-GG-SSSS + SSA 区域规则 | 078-05-1120 |
+| 国际信用卡 | 13-19 位 + Luhn + IIN 前缀 | 4242424242424242 (Visa) |
+
+校验函数在 `gateway/pkg/global/`（`ValidURL` / `ValidUSSSN` / `ValidCreditCard` / `IsInternationalCard`），与中文 `pkg/cn/` 解耦、不互相依赖。
+
+PII Engineer 侧模型支持 13+ 语言：English, Malay, Tamil, Chinese, Indonesian, Vietnamese, Thai, Hindi, Bengali, Korean, Japanese, German, French, Spanish, Portuguese, Russian, Arabic, Turkish, Polish, Dutch, Italian, Swedish 等 35+ 语言。
+
+> ⚠️ **未兑现**：上述多语言能力来自 PII Engineer（尚未集成，见 `DECISIONS.md D001` 与 `DECISION.md`）。当前默认引擎为内置正则 `detection.engine=regex`，覆盖中英双语上表所列类型。
 
 ## 🔍 审计与合规
 

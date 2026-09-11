@@ -28,6 +28,13 @@ type Entity struct {
 }
 
 // 实体类型常量（契约 §6.1 权威表）。
+//
+// 命名约定（2026-09-11 拍板）：
+//   - zh_*：仅中文语料有效（如身份证/手机号/地址）
+//   - 不带前缀：国际通用（email/ip_address/date/api_key/...）
+//   - 英文专属实体（iban_code / us_ssn / credit_card / url / plate）：
+//     沿用 privaite / Microsoft Presidio 的国际惯例命名，不带 en_ 前缀。
+//     这是国际化基线，不属于「支持更多语言」（见 DECISION.md §8.6 注脚）。
 const (
 	EntityPersonName = "zh_person_name"
 	EntityPhone      = "zh_phone"
@@ -40,6 +47,11 @@ const (
 	EntityAPIKey     = "api_key"
 	EntityPassword   = "password"
 	EntityToken      = "token"
+	// 英文/国际化基线（2026-09-11）：
+	EntityPlate      = "plate"       // 中英车牌统一（中文见 rePlate，英文见 rePlateEN）
+	EntityURL        = "url"         // URL（HTTP/HTTPS/FTP）
+	EntityUSSSN      = "us_ssn"      // 美国社会安全号 AAA-GG-SSSS
+	EntityCreditCard = "credit_card" // 国际信用卡（Luhn，跟 zh_bank_card 共用校验）
 )
 
 // IrreversibleTypes 走不可逆 redact 的实体类型（契约 §6.1）。

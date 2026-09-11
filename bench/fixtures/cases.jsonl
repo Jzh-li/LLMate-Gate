@@ -88,36 +88,36 @@
 {"id": "id_card-028", "subset": "id_card", "text": "身份证号：330106199510178863（仅用于本次实名认证，不作他用）。", "expect": [{"type": "zh_id_card", "value": "330106199510178863", "start": 15, "end": 33}]}
 {"id": "id_card-029", "subset": "id_card", "text": "身份证号：440305200010247426（仅用于本次实名认证，不作他用）。", "expect": [{"type": "zh_id_card", "value": "440305200010247426", "start": 15, "end": 33}]}
 {"id": "id_card-030", "subset": "id_card", "text": "身份证号：110101198512211148（仅用于本次实名认证，不作他用）。", "expect": [{"type": "zh_id_card", "value": "110101198512211148", "start": 15, "end": 33}]}
-{"id": "bank_card-001", "subset": "bank_card", "text": "收款账户 4399812181787929 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "4399812181787929", "start": 13, "end": 29}]}
-{"id": "bank_card-002", "subset": "bank_card", "text": "收款账户 6467418962759939 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "6467418962759939", "start": 13, "end": 29}]}
-{"id": "bank_card-003", "subset": "bank_card", "text": "收款账户 4610672645448465 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "4610672645448465", "start": 13, "end": 29}]}
-{"id": "bank_card-004", "subset": "bank_card", "text": "收款账户 3599675609337126 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "3599675609337126", "start": 13, "end": 29}]}
-{"id": "bank_card-005", "subset": "bank_card", "text": "收款账户 1179848484116624 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "1179848484116624", "start": 13, "end": 29}]}
-{"id": "bank_card-006", "subset": "bank_card", "text": "收款账户 7782590997410732 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "7782590997410732", "start": 13, "end": 29}]}
-{"id": "bank_card-007", "subset": "bank_card", "text": "收款账户 6393214812883956 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "6393214812883956", "start": 13, "end": 29}]}
-{"id": "bank_card-008", "subset": "bank_card", "text": "收款账户 6507025250661743 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "6507025250661743", "start": 13, "end": 29}]}
-{"id": "bank_card-009", "subset": "bank_card", "text": "收款账户 3467542805653277 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "3467542805653277", "start": 13, "end": 29}]}
-{"id": "bank_card-010", "subset": "bank_card", "text": "收款账户 0917512913888695 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "0917512913888695", "start": 13, "end": 29}]}
-{"id": "bank_card-011", "subset": "bank_card", "text": "收款账户 6828733575521417 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "6828733575521417", "start": 13, "end": 29}]}
-{"id": "bank_card-012", "subset": "bank_card", "text": "收款账户 2916236591578611 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "2916236591578611", "start": 13, "end": 29}]}
-{"id": "bank_card-013", "subset": "bank_card", "text": "收款账户 7358882526415165 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "7358882526415165", "start": 13, "end": 29}]}
-{"id": "bank_card-014", "subset": "bank_card", "text": "收款账户 4819477995945600 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "4819477995945600", "start": 13, "end": 29}]}
-{"id": "bank_card-015", "subset": "bank_card", "text": "收款账户 3749495015891205 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "3749495015891205", "start": 13, "end": 29}]}
-{"id": "bank_card-016", "subset": "bank_card", "text": "收款账户 7246575074713231 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "7246575074713231", "start": 13, "end": 29}]}
-{"id": "bank_card-017", "subset": "bank_card", "text": "收款账户 8733609581271553 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "8733609581271553", "start": 13, "end": 29}]}
-{"id": "bank_card-018", "subset": "bank_card", "text": "收款账户 5737123293223219 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "5737123293223219", "start": 13, "end": 29}]}
-{"id": "bank_card-019", "subset": "bank_card", "text": "收款账户 5674390065610544 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "5674390065610544", "start": 13, "end": 29}]}
-{"id": "bank_card-020", "subset": "bank_card", "text": "收款账户 8076881055562404 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "8076881055562404", "start": 13, "end": 29}]}
-{"id": "bank_card-021", "subset": "bank_card", "text": "收款账户 5100609172809168 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "5100609172809168", "start": 13, "end": 29}]}
-{"id": "bank_card-022", "subset": "bank_card", "text": "收款账户 8059191861298933 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "8059191861298933", "start": 13, "end": 29}]}
-{"id": "bank_card-023", "subset": "bank_card", "text": "收款账户 5767580788972829 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "5767580788972829", "start": 13, "end": 29}]}
-{"id": "bank_card-024", "subset": "bank_card", "text": "收款账户 6230072696496858 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "6230072696496858", "start": 13, "end": 29}]}
-{"id": "bank_card-025", "subset": "bank_card", "text": "收款账户 9369532444112500 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "9369532444112500", "start": 13, "end": 29}]}
-{"id": "bank_card-026", "subset": "bank_card", "text": "收款账户 2035572281749062 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "2035572281749062", "start": 13, "end": 29}]}
-{"id": "bank_card-027", "subset": "bank_card", "text": "收款账户 8742370877358245 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "8742370877358245", "start": 13, "end": 29}]}
-{"id": "bank_card-028", "subset": "bank_card", "text": "收款账户 4075311860324741 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "4075311860324741", "start": 13, "end": 29}]}
-{"id": "bank_card-029", "subset": "bank_card", "text": "收款账户 2197014502360381 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "2197014502360381", "start": 13, "end": 29}]}
-{"id": "bank_card-030", "subset": "bank_card", "text": "收款账户 0138285537225452 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "0138285537225452", "start": 13, "end": 29}]}
+{"id": "bank_card-001", "subset": "bank_card", "text": "收款账户 624399812181787924 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "624399812181787924", "start": 13, "end": 31}]}
+{"id": "bank_card-002", "subset": "bank_card", "text": "收款账户 626467418962759934 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "626467418962759934", "start": 13, "end": 31}]}
+{"id": "bank_card-003", "subset": "bank_card", "text": "收款账户 624610672645448460 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "624610672645448460", "start": 13, "end": 31}]}
+{"id": "bank_card-004", "subset": "bank_card", "text": "收款账户 623599675609337121 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "623599675609337121", "start": 13, "end": 31}]}
+{"id": "bank_card-005", "subset": "bank_card", "text": "收款账户 621179848484116629 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "621179848484116629", "start": 13, "end": 31}]}
+{"id": "bank_card-006", "subset": "bank_card", "text": "收款账户 627782590997410737 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "627782590997410737", "start": 13, "end": 31}]}
+{"id": "bank_card-007", "subset": "bank_card", "text": "收款账户 626393214812883951 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "626393214812883951", "start": 13, "end": 31}]}
+{"id": "bank_card-008", "subset": "bank_card", "text": "收款账户 626507025250661748 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "626507025250661748", "start": 13, "end": 31}]}
+{"id": "bank_card-009", "subset": "bank_card", "text": "收款账户 623467542805653272 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "623467542805653272", "start": 13, "end": 31}]}
+{"id": "bank_card-010", "subset": "bank_card", "text": "收款账户 620917512913888690 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "620917512913888690", "start": 13, "end": 31}]}
+{"id": "bank_card-011", "subset": "bank_card", "text": "收款账户 626828733575521412 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "626828733575521412", "start": 13, "end": 31}]}
+{"id": "bank_card-012", "subset": "bank_card", "text": "收款账户 622916236591578616 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "622916236591578616", "start": 13, "end": 31}]}
+{"id": "bank_card-013", "subset": "bank_card", "text": "收款账户 627358882526415160 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "627358882526415160", "start": 13, "end": 31}]}
+{"id": "bank_card-014", "subset": "bank_card", "text": "收款账户 624819477995945605 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "624819477995945605", "start": 13, "end": 31}]}
+{"id": "bank_card-015", "subset": "bank_card", "text": "收款账户 623749495015891200 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "623749495015891200", "start": 13, "end": 31}]}
+{"id": "bank_card-016", "subset": "bank_card", "text": "收款账户 627246575074713236 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "627246575074713236", "start": 13, "end": 31}]}
+{"id": "bank_card-017", "subset": "bank_card", "text": "收款账户 628733609581271558 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "628733609581271558", "start": 13, "end": 31}]}
+{"id": "bank_card-018", "subset": "bank_card", "text": "收款账户 625737123293223214 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "625737123293223214", "start": 13, "end": 31}]}
+{"id": "bank_card-019", "subset": "bank_card", "text": "收款账户 625674390065610549 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "625674390065610549", "start": 13, "end": 31}]}
+{"id": "bank_card-020", "subset": "bank_card", "text": "收款账户 628076881055562409 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "628076881055562409", "start": 13, "end": 31}]}
+{"id": "bank_card-021", "subset": "bank_card", "text": "收款账户 625100609172809163 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "625100609172809163", "start": 13, "end": 31}]}
+{"id": "bank_card-022", "subset": "bank_card", "text": "收款账户 628059191861298938 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "628059191861298938", "start": 13, "end": 31}]}
+{"id": "bank_card-023", "subset": "bank_card", "text": "收款账户 625767580788972824 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "625767580788972824", "start": 13, "end": 31}]}
+{"id": "bank_card-024", "subset": "bank_card", "text": "收款账户 626230072696496853 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "626230072696496853", "start": 13, "end": 31}]}
+{"id": "bank_card-025", "subset": "bank_card", "text": "收款账户 629369532444112505 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "629369532444112505", "start": 13, "end": 31}]}
+{"id": "bank_card-026", "subset": "bank_card", "text": "收款账户 622035572281749067 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "622035572281749067", "start": 13, "end": 31}]}
+{"id": "bank_card-027", "subset": "bank_card", "text": "收款账户 628742370877358240 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "628742370877358240", "start": 13, "end": 31}]}
+{"id": "bank_card-028", "subset": "bank_card", "text": "收款账户 624075311860324746 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "624075311860324746", "start": 13, "end": 31}]}
+{"id": "bank_card-029", "subset": "bank_card", "text": "收款账户 622197014502360386 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "622197014502360386", "start": 13, "end": 31}]}
+{"id": "bank_card-030", "subset": "bank_card", "text": "收款账户 620138285537225457 归属招商银行，请核对后再转账。", "expect": [{"type": "zh_bank_card", "value": "620138285537225457", "start": 13, "end": 31}]}
 {"id": "address-001", "subset": "address", "text": "收件地址：浙江省浦东新区中关村大街43号，收件人请保持电话畅通。", "expect": [{"type": "zh_address", "value": "浙江省浦东新区中关村大街43号", "start": 15, "end": 56}]}
 {"id": "address-002", "subset": "address", "text": "收件地址：广东省海淀区文三路92号，收件人请保持电话畅通。", "expect": [{"type": "zh_address", "value": "广东省海淀区文三路92号", "start": 15, "end": 47}]}
 {"id": "address-003", "subset": "address", "text": "收件地址：广东省浦东新区文三路20号，收件人请保持电话畅通。", "expect": [{"type": "zh_address", "value": "广东省浦东新区文三路20号", "start": 15, "end": 50}]}
@@ -211,15 +211,15 @@
 {"id": "adversarial-001", "subset": "adversarial", "text": "回执将发送至账户绑定邮箱liu.yang@mail.cn如未收到请检查垃圾箱", "expect": [{"type": "email", "value": "liu.yang@mail.cn", "start": 36, "end": 52}]}
 {"id": "adversarial-002", "subset": "adversarial", "text": "备注栏请填写紧急联系人电话19321950332以及关系说明后提交审核", "expect": [{"type": "zh_phone", "value": "19321950332", "start": 39, "end": 50}]}
 {"id": "adversarial-003", "subset": "adversarial", "text": "备注栏请填写紧急联系人电话18758716387以及关系说明后提交审核", "expect": [{"type": "zh_phone", "value": "18758716387", "start": 39, "end": 50}]}
-{"id": "adversarial-004", "subset": "adversarial", "text": "对公账号-7671624096563556-开户行代码-102", "expect": [{"type": "zh_bank_card", "value": "7671624096563556", "start": 13, "end": 29}]}
+{"id": "adversarial-004", "subset": "adversarial", "text": "对公账号-627671624096563551-开户行代码-102", "expect": [{"type": "zh_bank_card", "value": "627671624096563551", "start": 13, "end": 31}]}
 {"id": "adversarial-005", "subset": "adversarial", "text": "回执将发送至账户绑定邮箱chenjie@corp.io如未收到请检查垃圾箱", "expect": [{"type": "email", "value": "chenjie@corp.io", "start": 36, "end": 51}]}
 {"id": "adversarial-006", "subset": "adversarial", "text": "回执将发送至账户绑定邮箱chenjie@mail.cn如未收到请检查垃圾箱", "expect": [{"type": "email", "value": "chenjie@mail.cn", "start": 36, "end": 51}]}
 {"id": "adversarial-007", "subset": "adversarial", "text": "持证人的法定证件编号依次为440305200108273083现予登记备案", "expect": [{"type": "zh_id_card", "value": "440305200108273083", "start": 39, "end": 57}]}
 {"id": "adversarial-008", "subset": "adversarial", "text": "备注栏请填写紧急联系人电话14780780313以及关系说明后提交审核", "expect": [{"type": "zh_phone", "value": "14780780313", "start": 39, "end": 50}]}
-{"id": "adversarial-009", "subset": "adversarial", "text": "对公账号-6934548524363013-开户行代码-102", "expect": [{"type": "zh_bank_card", "value": "6934548524363013", "start": 13, "end": 29}]}
+{"id": "adversarial-009", "subset": "adversarial", "text": "对公账号-626934548524363018-开户行代码-102", "expect": [{"type": "zh_bank_card", "value": "626934548524363018", "start": 13, "end": 31}]}
 {"id": "adversarial-010", "subset": "adversarial", "text": "备注栏请填写紧急联系人电话19088082817以及关系说明后提交审核", "expect": [{"type": "zh_phone", "value": "19088082817", "start": 39, "end": 50}]}
 {"id": "adversarial-011", "subset": "adversarial", "text": "持证人的法定证件编号依次为330106199005100985现予登记备案", "expect": [{"type": "zh_id_card", "value": "330106199005100985", "start": 39, "end": 57}]}
-{"id": "adversarial-012", "subset": "adversarial", "text": "对公账号-5787747828915052-开户行代码-102", "expect": [{"type": "zh_bank_card", "value": "5787747828915052", "start": 13, "end": 29}]}
+{"id": "adversarial-012", "subset": "adversarial", "text": "对公账号-625787747828915057-开户行代码-102", "expect": [{"type": "zh_bank_card", "value": "625787747828915057", "start": 13, "end": 31}]}
 {"id": "adversarial-013", "subset": "adversarial", "text": "持证人的法定证件编号依次为320106199011272298现予登记备案", "expect": [{"type": "zh_id_card", "value": "320106199011272298", "start": 39, "end": 57}]}
 {"id": "adversarial-014", "subset": "adversarial", "text": "备注栏请填写紧急联系人电话13637308030以及关系说明后提交审核", "expect": [{"type": "zh_phone", "value": "13637308030", "start": 39, "end": 50}]}
 {"id": "adversarial-015", "subset": "adversarial", "text": "备注栏请填写紧急联系人电话17028165400以及关系说明后提交审核", "expect": [{"type": "zh_phone", "value": "17028165400", "start": 39, "end": 50}]}
@@ -228,7 +228,7 @@
 {"id": "adversarial-018", "subset": "adversarial", "text": "持证人的法定证件编号依次为44030519851226842X现予登记备案", "expect": [{"type": "zh_id_card", "value": "44030519851226842X", "start": 39, "end": 57}]}
 {"id": "adversarial-019", "subset": "adversarial", "text": "备注栏请填写紧急联系人电话17122231900以及关系说明后提交审核", "expect": [{"type": "zh_phone", "value": "17122231900", "start": 39, "end": 50}]}
 {"id": "adversarial-020", "subset": "adversarial", "text": "备注栏请填写紧急联系人电话17807830777以及关系说明后提交审核", "expect": [{"type": "zh_phone", "value": "17807830777", "start": 39, "end": 50}]}
-{"id": "adversarial-021", "subset": "adversarial", "text": "对公账号-6605607499997870-开户行代码-102", "expect": [{"type": "zh_bank_card", "value": "6605607499997870", "start": 13, "end": 29}]}
+{"id": "adversarial-021", "subset": "adversarial", "text": "对公账号-626605607499997875-开户行代码-102", "expect": [{"type": "zh_bank_card", "value": "626605607499997875", "start": 13, "end": 31}]}
 {"id": "adversarial-022", "subset": "adversarial", "text": "备注栏请填写紧急联系人电话19290000541以及关系说明后提交审核", "expect": [{"type": "zh_phone", "value": "19290000541", "start": 39, "end": 50}]}
 {"id": "adversarial-023", "subset": "adversarial", "text": "备注栏请填写紧急联系人电话18765881825以及关系说明后提交审核", "expect": [{"type": "zh_phone", "value": "18765881825", "start": 39, "end": 50}]}
 {"id": "adversarial-024", "subset": "adversarial", "text": "备注栏请填写紧急联系人电话13660056952以及关系说明后提交审核", "expect": [{"type": "zh_phone", "value": "13660056952", "start": 39, "end": 50}]}
@@ -237,4 +237,4 @@
 {"id": "adversarial-027", "subset": "adversarial", "text": "持证人的法定证件编号依次为310115198510010196现予登记备案", "expect": [{"type": "zh_id_card", "value": "310115198510010196", "start": 39, "end": 57}]}
 {"id": "adversarial-028", "subset": "adversarial", "text": "持证人的法定证件编号依次为510107199004121522现予登记备案", "expect": [{"type": "zh_id_card", "value": "510107199004121522", "start": 39, "end": 57}]}
 {"id": "adversarial-029", "subset": "adversarial", "text": "持证人的法定证件编号依次为310115199502212067现予登记备案", "expect": [{"type": "zh_id_card", "value": "310115199502212067", "start": 39, "end": 57}]}
-{"id": "adversarial-030", "subset": "adversarial", "text": "对公账号-6291195343225069-开户行代码-102", "expect": [{"type": "zh_bank_card", "value": "6291195343225069", "start": 13, "end": 29}]}
+{"id": "adversarial-030", "subset": "adversarial", "text": "对公账号-626291195343225064-开户行代码-102", "expect": [{"type": "zh_bank_card", "value": "626291195343225064", "start": 13, "end": 31}]}

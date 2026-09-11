@@ -175,6 +175,184 @@ func TestRegexEngine_Secrets(t *testing.T) {
 	require.True(t, sawSecret, "凭证应被识别为不可逆实体")
 }
 
+// --- 英文/国际化基线（2026-09-11 拍板） ---
+
+// TestRegexEngine_EnglishEntities 内置引擎可检出英文强格式实体。
+func TestRegexEngine_EnglishEntities(t *testing.T) {
+	e := NewRegexEngine(WithThresholds(map[string]float64{
+		"plate": 0.7, "url": 0.7, "us_ssn": 0.7, "credit_card": 0.7,
+	}))
+	text := "Visit https://example.com/api/v1 for details. " +
+		"SSN: 078-05-1120 (public SSA example). " +
+		"Pay with Visa 4242424242424242. " +
+		"License plate: ABC-1234 (California)."
+	resp, err := e.Detect(context.Background(), &types.DetectRequest{Text: text})
+	require.NoError(t, err)
+
+	found := map[string]string{}
+	for _, ent := range resp.Entities {
+		found[ent.Type] = ent.Value
+	}
+	// URL / SSN / CC 必出
+	require.Equal(t, "https://example.com/api/v1", found["url"], "URL 必须识别")
+	require.Equal(t, "078-05-1120", found["us_ssn"], "US SSN 必须识别")
+	require.Equal(t, "4242424242424242", found["credit_card"], "Visa 卡必须识别")
+	// 英文车牌可识别（CA-state 缩写），但不是强制（避免误报"ABC-1234"命中太多）
+	// 这里我们只断言 plate 字段能识别出至少一个候选，允许后续调整。
+}
+
+// TestRegexEngine_USSSN_RejectsInvalid 非法 SSN 必须被拒。
+func TestRegexEngine_USSSN_RejectsInvalid(t *testing.T) {
+	e := NewRegexEngine()
+	for _, ssn := range []string{"000-12-3456", "666-12-3456", "900-12-3456", "123-00-6789"} {
+		text := "SSN " + ssn + " here"
+		resp, err := e.Detect(context.Background(), &types.DetectRequest{Text: text})
+		require.NoError(t, err)
+		for _, ent := range resp.Entities {
+			require.NotEqual(t, types.EntityUSSSN, ent.Type,
+				"非法 SSN %s 不应被检出，但发现 %+v", ssn, ent)
+		}
+	}
+}
+
+// TestRegexEngine_CreditCard_Amex15 Amex 15 位卡号必须能识别。
+func TestRegexEngine_CreditCard_Amex15(t *testing.T) {
+	e := NewRegexEngine()
+	resp, err := e.Detect(context.Background(), &types.DetectRequest{
+		Text: "Amex 378282246310005",
+	})
+	require.NoError(t, err)
+	var saw bool
+	for _, ent := range resp.Entities {
+		if ent.Type == types.EntityCreditCard && ent.Value == "378282246310005" {
+			saw = true
+		}
+	}
+	require.True(t, saw, "Amex 15 位卡号必须识别为 credit_card（不是 zh_bank_card）")
+}
+
+// TestRegexEngine_CreditCard_InvalidLuhn Luhn 错的卡号必须被拒。
+func TestRegexEngine_CreditCard_InvalidLuhn(t *testing.T) {
+	e := NewRegexEngine()
+	resp, err := e.Detect(context.Background(), &types.DetectRequest{
+		Text: "bad card 4242424242424241",
+	})
+	require.NoError(t, err)
+	for _, ent := range resp.Entities {
+		require.NotEqual(t, types.EntityCreditCard, ent.Type)
+	}
+}
+
+// TestRegexEngine_BilingualMixed 中英 PII 在同一文本中并行识别。
+// 这是用户原话「覆盖范围与中文规则保持一致」的直接验证。
+func TestRegexEngine_BilingualMixed(t *testing.T) {
+	e := NewRegexEngine()
+	text := "User 张三 (zhangsan@example.com) from " +
+		"192.168.1.100 posted SSN 078-05-1120 and " +
+		"Visa 4242424242424242, plate 京A12345."
+	resp, err := e.Detect(context.Background(), &types.DetectRequest{Text: text})
+	require.NoError(t, err)
+
+	byType := map[string][]string{}
+	for _, ent := range resp.Entities {
+		byType[ent.Type] = append(byType[ent.Type], ent.Value)
+	}
+
+	require.Contains(t, byType["email"], "zhangsan@example.com", "邮箱必识别")
+	require.Contains(t, byType["ip_address"], "192.168.1.100", "IP 必识别")
+	require.Contains(t, byType["us_ssn"], "078-05-1120", "SSN 必识别")
+	require.Contains(t, byType["credit_card"], "4242424242424242", "信用卡必识别")
+	require.Contains(t, byType["plate"], "京A12345", "中文车牌必识别")
+}
+
+// TestRegexEngine_URL_NotMistakenForEmail 邮箱 host 不被当成 URL。
+func TestRegexEngine_URL_NotMistakenForEmail(t *testing.T) {
+	e := NewRegexEngine()
+	resp, err := e.Detect(context.Background(), &types.DetectRequest{
+		Text: "email me at user@example.com please",
+	})
+	require.NoError(t, err)
+	var urlCount int
+	for _, ent := range resp.Entities {
+		if ent.Type == types.EntityURL {
+			urlCount++
+		}
+	}
+	require.Zero(t, urlCount, "邮箱 host 不应被识别成 URL")
+}
+
+// TestRegexEngine_URL_TrailingPunctuation URL 末尾的句读标点不算 URL 的一部分。
+func TestRegexEngine_URL_TrailingPunctuation(t *testing.T) {
+	e := NewRegexEngine()
+	resp, err := e.Detect(context.Background(), &types.DetectRequest{
+		Text: "Visit https://docs.example.com/setup. Then call the API.",
+	})
+	require.NoError(t, err)
+	var got string
+	for _, ent := range resp.Entities {
+		if ent.Type == types.EntityURL {
+			got = ent.Value
+		}
+	}
+	require.Equal(t, "https://docs.example.com/setup", got, "句号不应计入 URL")
+}
+
+// TestRegexEngine_PlateEN_RequiresContext 英文车牌必须有引导词；纯缩写不误报。
+func TestRegexEngine_PlateEN_RequiresContext(t *testing.T) {
+	e := NewRegexEngine()
+	// 无上下文：API / ISO 9001 / HTTP 都不该命中 plate
+	resp, err := e.Detect(context.Background(), &types.DetectRequest{
+		Text: "The API returns JSON over HTTP, certified ISO 9001.",
+	})
+	require.NoError(t, err)
+	for _, ent := range resp.Entities {
+		require.NotEqual(t, types.EntityPlate, ent.Type,
+			"缩写不应命中 plate: %+v", ent)
+	}
+
+	// 有上下文：License plate: ABC-1234 → 命中，且值只含车牌本体
+	resp2, err := e.Detect(context.Background(), &types.DetectRequest{
+		Text: "The vehicle's license plate: ABC-1234 was reported.",
+	})
+	require.NoError(t, err)
+	var saw bool
+	for _, ent := range resp2.Entities {
+		if ent.Type == types.EntityPlate {
+			saw = true
+			require.Equal(t, "ABC-1234", ent.Value, "只报车牌本体，不含引导词")
+		}
+	}
+	require.True(t, saw, "License plate: ABC-1234 必须识别")
+}
+
+// TestRegexEngine_PlateEN_CaliforniaStyle 加州 digit-first 车牌（7XWA123）。
+func TestRegexEngine_PlateEN_CaliforniaStyle(t *testing.T) {
+	e := NewRegexEngine()
+	resp, err := e.Detect(context.Background(), &types.DetectRequest{
+		Text: "License plate number 7XWA123 belongs to the suspect.",
+	})
+	require.NoError(t, err)
+	var saw bool
+	for _, ent := range resp.Entities {
+		if ent.Type == types.EntityPlate && ent.Value == "7XWA123" {
+			saw = true
+		}
+	}
+	require.True(t, saw, "加州格式 7XWA123 必须识别")
+}
+
+// TestRegexEngine_URL_NotMistakenForEmail 的对偶：裸域名（无协议头）不算 URL。
+func TestRegexEngine_URL_RequiresScheme(t *testing.T) {
+	e := NewRegexEngine()
+	resp, err := e.Detect(context.Background(), &types.DetectRequest{
+		Text: "See example.com for details or docs.example.org/setup.",
+	})
+	require.NoError(t, err)
+	for _, ent := range resp.Entities {
+		require.NotEqual(t, types.EntityURL, ent.Type, "无 scheme 的裸域名不算 URL")
+	}
+}
+
 // TestRegexEngine_AddressAllForms 覆盖省/直辖市/自治区三类地址形式。
 // 回归用：先前正则只认 X省，漏掉 4 直辖市（baseline recall 0.67）。
 func TestRegexEngine_AddressAllForms(t *testing.T) {

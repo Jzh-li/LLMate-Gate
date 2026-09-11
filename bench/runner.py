@@ -50,6 +50,8 @@ DEFAULT_CASES = ROOT / "fixtures" / "cases.jsonl"
 DEFAULT_OUT = ROOT / "reports"
 
 # 候选类型集合（与 pkg/types 常量对齐）
+# 【2026-09-11】新增英文/国际化基线 4 类（DECISION.md §8.5）：
+# plate（中英车牌统一）/ url / us_ssn / credit_card
 ALL_TYPES = (
     "zh_person_name",
     "zh_phone",
@@ -59,6 +61,10 @@ ALL_TYPES = (
     "email",
     "ip_address",
     "date",
+    "plate",
+    "url",
+    "us_ssn",
+    "credit_card",
 )
 
 
@@ -140,6 +146,12 @@ def load_cases(path: Path) -> Iterable[tuple[str, str, list[Expect]]]:
             yield cid, subset, expect, obj.get("text", "")
 
 
+# 【2026-09-11】无代理 opener：bench 永远打本地网关，绝不能走系统代理。
+# 否则 Windows 下 urllib 读注册表/环境代理（http_proxy=...），127.0.0.1 被
+# 代理劫持导致挂起（timeout 不报错）。curl 之所以没事是它对 localhost 豁免。
+_NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def call_detect(endpoint: str, text: str, timeout: float = 10.0) -> tuple[list[Detect], int, str]:
     """POST /_api/detect，返回 (entities, latency_ms, error)。"""
     payload = json.dumps({"text": text}).encode("utf-8")
@@ -151,7 +163,7 @@ def call_detect(endpoint: str, text: str, timeout: float = 10.0) -> tuple[list[D
     )
     t0 = time.perf_counter()
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _NO_PROXY_OPENER.open(req, timeout=timeout) as resp:
             raw = resp.read()
             elapsed_ms = int((time.perf_counter() - t0) * 1000)
             body = json.loads(raw.decode("utf-8"))
@@ -435,11 +447,12 @@ def render_report(
             lines.append(f"（共 {len(fn_all)} 条，此处省略 {len(fn_all) - 50} 条，全量见 JSON 报告）")
 
     # 诚实声明：语料是自作者合成，F1 不构成真实场景结论
+    gen_name = "generate_en.py" if "cases_en" in str(cases_path) else "generate.py"
     lines += [
         "",
         "## 口径声明（必读）",
         "",
-        "> 本语料由 `generate.py` 合成，**不是真实流量，也没有第三方独立标注**。",
+        f"> 本语料由 `{gen_name}` 合成，**不是真实流量，也没有第三方独立标注**。",
         "> 在自作者语料上自评，F1 高只说明「检测器与生成器对同一套仿真规则达成一致」，",
         "> **不等于真实场景召回率**。参照 privaite-bench 的做法（用 AI4Privacy / Gretel /",
         "> Nemotron 三方标签交叉校验），在拿到**人工或第三方标注子集**之前，",

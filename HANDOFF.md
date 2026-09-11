@@ -112,6 +112,9 @@ git -c safe.directory='*' push origin main
 | `30c9de0` | 直辖市正则修复（地址 F1 0.80→1.00） | 全量 F1 = **1.0000**，240/240 全过 |
 | `94e1d6b` | docs: PROGRESS 收口 | — |
 | `10f8d48` | Apache 2.0 LICENSE + V1_READINESS | v1 阻塞项解除 |
+| `8e29e0d` | DECISION §8 差异化清单（3 层 12 项） | 文档；含 4 空白 + 5 不做 |
+| `455405f` | 协议层 T1+T2+T3（块 allowlist / gate_only / PII 块类型） | go test + vet 双绿 |
+| 双语检测 | 中英文 PII 基线（见 §6） | 中文 240 条 F1=1.0 零回归 + 英文 180 条 F1=1.0 |
 
 完整：`git -c safe.directory='*' log --oneline -20`
 
@@ -180,6 +183,14 @@ git -c safe.directory='*' push origin main
 | 7 | 审计合规 | ✅ | 结构化审计 + bench 报告 |
 
 **6/7 达成**，第 4 项是 v1.1 范畴。详见 `V1_READINESS.md`。
+
+**2026-09-11 双语基线补充**：隐私功能中英双语（用户拍板，方案 B）。
+
+- 新类型：`plate`（中英统一）/ `url` / `us_ssn` / `credit_card`（IIN 前缀分发，与 `zh_bank_card` 单一数字块二选一）
+- 新包：`gateway/pkg/global/`（国际实体校验：ValidURL / ValidUSSSN / ValidCreditCard / IsInternationalCard）
+- 语料：`bench/fixtures/cases_en.jsonl`（180 条，`generate_en.py` 生成）；中文 `generate.py` 卡号改 62 银联前缀（rnd 消耗不变，其余 205 条字节级不变）
+- 基准：中文 240 条 F1=**1.0 零回归**，英文 180 条 F1=**1.0**（报告 `bench/reports/phase0_regex_20260911-0219{39,44}.md`）
+- 坑：`bench/runner.py` 在 Windows 上被系统代理劫持打 127.0.0.1 挂起 → 已改用显式无代理 opener（`urllib.request.ProxyHandler({})`）
 
 ---
 

@@ -1,4 +1,4 @@
 [submodule "bench"]
 	path = bench
-	url = git@github.com:Jzh-li/cn-pii-bench.git
+	url = https://github.com/Jzh-li/cn-pii-bench.git
 	branch = main

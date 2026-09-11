@@ -39,7 +39,7 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           [[ "$TAG" == "main" || -z "$TAG" ]] && TAG="dev"
           mkdir -p dist
-          for t in "linux amd64" "linux arm64" "darwin amd64" "darwin arm64" "windows amd64 .exe"; do
+          for t in "linux amd64" "linux arm64" "darwin amd64" "darwin arm64" "windows amd64 .exe" "windows arm64 .exe"; do
             read goos goarch ext <<<"$t"
             out="dist/llmate-gate-${goos}-${goarch}${ext}"
             echo "==> ${goos}/${goarch}"
@@ -62,5 +62,6 @@ jobs:
             dist/llmate-gate-darwin-amd64
             dist/llmate-gate-darwin-arm64
             dist/llmate-gate-windows-amd64.exe
+            dist/llmate-gate-windows-arm64.exe
             dist/SHA256SUMS
           fail_on_unmatched_files: true

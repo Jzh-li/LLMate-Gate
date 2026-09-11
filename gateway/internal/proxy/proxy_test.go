@@ -435,5 +435,42 @@ func TestProxy_ConversationIncremental(t *testing.T) {
 	require.NotContains(t, up, "13700137000")
 }
 
+// TestProxy_ResponsesAPI_Anonymize 验证 OpenAI Responses API 路径（/v1/responses）协议级脱敏。
+// transform 是协议无关的递归改写器，T1 已写入全部 Responses 专属 opaque/block 类型；
+// 此处只证明 Responses 专属 shape 被正确处理：
+//   1. instructions / input[].content 进入 PII 上下文 → 手机号/邮箱被占位符化
+//   2. function_call.arguments 是 JSON 字符串 → 递归扫描内层字段
+//   3. reasoning 是 opaque block（opaqueBlockTypes）→ 整块跳过，内容原样透传不改写
+func TestProxy_ResponsesAPI_Anonymize(t *testing.T) {
+	tp := newTestProxy(t)
+	defer tp.closeUp()
+
+	body := `{
+		"model": "gpt-5",
+		"instructions": "客服热线 13800138000，请在工作时间回拨",
+		"input": [
+			{"type": "message", "role": "user", "content": "我的邮箱 user@example.com，请直接联系"},
+			{"type": "reasoning", "summary": ["内部推演：身份证 110101199001011234 不应被改动"]},
+			{"type": "function_call", "name": "lookup", "arguments": "{\"phone\":\"13800138000\",\"email\":\"zhangsan@example.com\"}"}
+		]
+	}`
+	req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	tp.px.Handle(rec, req, "responses", false)
+
+	require.Equal(t, 200, rec.Code)
+
+	up := tp.lastUp()
+	// 明文绝不上游
+	require.NotContains(t, up, "13800138000", "手机号明文不应进入上游")
+	require.NotContains(t, up, "user@example.com", "邮箱明文不应进入上游")
+	require.NotContains(t, up, "zhangsan@example.com", "function_call.arguments 内层邮箱明文不应进入上游")
+	// 可逆字段 → 占位符（instructions 与 arguments 内的手机号都命中）
+	require.Contains(t, up, "<<zh_phone_", "instructions 内手机号应被占位符化")
+	require.Contains(t, up, "<<email_", "input 与 arguments 内邮箱应被占位符化")
+	// reasoning opaque block：整块跳过，内容原样保留（身份证不改写）
+	require.Contains(t, up, "110101199001011234", "reasoning opaque block 内容应原样透传")
+}
+
 
 

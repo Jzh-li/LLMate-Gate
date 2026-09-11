@@ -1,6 +1,6 @@
 {
     "version": "v0.1.0",
-    "description": "LLMate Gate — 中文 PII 脱敏本机网关（OpenAI 兼容反向代理）",
+    "description": "LLMate Gate — 中英双语 PII 脱敏本机网关（OpenAI 兼容反向代理）",
     "homepage": "https://github.com/Jzh-li/LLMate-Gate",
     "license": "Apache-2.0",
     "depends": "",
@@ -10,20 +10,32 @@
     "architecture": {
         "64bit": {
             "url": "https://github.com/Jzh-li/LLMate-Gate/releases/download/v0.1.0/llmate-gate-windows-amd64.exe",
-            "hash": "f64f7d5d69b65137fc05234cdc1541a95740dca6d6b58cf973efe757ac132b69",
+            "hash": "79cba3a9e22514901790f5a2f344550c97923446623f885494129b5b71039653",
+            "bin": "llmate-gate.exe",
+            "persist": "data"
+        },
+        "arm64": {
+            "url": "https://github.com/Jzh-li/LLMate-Gate/releases/download/v0.1.0/llmate-gate-windows-arm64.exe",
+            "hash": "bb4b523b7b44c93c1472ca070bc25b1b1a25322124a59d94db7182d98cd7b9a9",
             "bin": "llmate-gate.exe",
             "persist": "data"
         }
     },
     "checkver": "github: Jzh-li/LLMate-Gate",
     "autoupdate": {
-        "url": "https://github.com/Jzh-li/LLMate-Gate/releases/download/$version/llmate-gate-windows-amd64.exe",
+        "64bit": {
+            "url": "https://github.com/Jzh-li/LLMate-Gate/releases/download/$version/llmate-gate-windows-amd64.exe"
+        },
+        "arm64": {
+            "url": "https://github.com/Jzh-li/LLMate-Gate/releases/download/$version/llmate-gate-windows-arm64.exe"
+        },
         "hash": {
             "url": "$url.sha256"
         },
         "extract_dir": "",
         "renames": [
-            ["llmate-gate-windows-amd64.exe", "llmate-gate.exe"]
+            ["llmate-gate-windows-amd64.exe", "llmate-gate.exe"],
+            ["llmate-gate-windows-arm64.exe", "llmate-gate.exe"]
         ]
     },
     "post_install": [

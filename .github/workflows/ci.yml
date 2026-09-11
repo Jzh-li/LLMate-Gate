@@ -156,6 +156,8 @@ jobs:
       PYTHONUTF8: '1'
     steps:
       - uses: actions/checkout@v6
+        with:
+          submodules: true
 
       # 不引入 setup-python：runner 自带 python3 足够，少一个 Node20 action 依赖
       - name: 校验 cn-pii-bench fixture
@@ -170,6 +172,8 @@ jobs:
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v6
+        with:
+          submodules: true
 
       - uses: actions/setup-go@v6
         with:

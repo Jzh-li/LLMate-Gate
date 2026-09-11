@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"flag"
+	"fmt"
 	"log"
 	"net/url"
 	"os"
@@ -37,14 +38,22 @@ var version = "dev"
 
 func main() {
 	var (
-		configPath string
-		noDebug    bool
-		listen     string
+		configPath  string
+		noDebug     bool
+		listen      string
+		showVersion bool
 	)
 	flag.StringVar(&configPath, "config", "", "path to config.yaml (empty=defaults)")
 	flag.BoolVar(&noDebug, "no-debug", false, "disable embedded debug panel (/_debug, /ws/events, /_api/*)")
 	flag.StringVar(&listen, "listen", "", "override gateway.listen (e.g. :8400)")
+	flag.BoolVar(&showVersion, "version", false, "print version and exit (also -V)")
 	flag.Parse()
+
+	// --version / -version：打印注入的版本号后干净退出，供 scoop post_install 等外部调用方校验。
+	if showVersion {
+		fmt.Printf("llmate-gate %s\n", version)
+		return
+	}
 
 	cfg, err := config.Load(configPath)
 	if err != nil {

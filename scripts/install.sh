@@ -10,6 +10,7 @@
 #   ./scripts/install.sh                                  # 自动识别平台
 #   ./scripts/install.sh --binary ./llmate-gate-linux-amd64
 #   ./scripts/install.sh --port 8400 --no-autostart
+#   ./scripts/install.sh --dry-run                         # 只打印动作，不实际安装
 #   ./scripts/install.sh --uninstall
 set -euo pipefail
 
@@ -22,6 +23,7 @@ LAUNCHD_LABEL="com.${PRODUCT}.daemon"
 PORT="8400"
 NO_AUTOSTART=0
 DO_UNINSTALL=0
+DRY_RUN=0
 BIN_SRC=""
 
 while [[ $# -gt 0 ]]; do
@@ -30,8 +32,9 @@ while [[ $# -gt 0 ]]; do
     --port)    PORT="$2"; shift 2 ;;
     --no-autostart) NO_AUTOSTART=1; shift ;;
     --uninstall) DO_UNINSTALL=1; shift ;;
+    --dry-run) DRY_RUN=1; shift ;;
     -h|--help)
-      sed -n '2,18p' "$0"; exit 0 ;;
+      sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
@@ -39,8 +42,23 @@ done
 log()  { printf '[install] %s\n' "$*"; }
 fail() { printf '[install][FAIL] %s\n' "$*" >&2; exit 1; }
 
+# DRY_RUN 模式：把所有"破坏性操作"只打印不执行
+run() {
+  if [[ $DRY_RUN -eq 1 ]]; then
+    printf '  [dry-run] %s\n' "$*"
+  else
+    "$@"
+  fi
+}
+
 OS="$(uname -s | tr 'A-Z' 'a-z')"
-case "$OS" in linux) ;; darwin) ;; *) fail "unsupported OS: $OS" ;; esac
+case "$OS" in
+  linux) ;;
+  darwin) ;;
+  *)
+    fail "unsupported OS: $OS (uname -s → $OS)。本脚本仅支持 Linux + macOS。"
+    ;;
+esac
 
 # 默认 binary 路径
 guess_binary() {
@@ -62,16 +80,16 @@ if [[ $DO_UNINSTALL -eq 1 ]]; then
   log "卸载 $PRODUCT"
   case "$OS" in
     linux)
-      systemctl --user disable --now "$SERVICE_NAME" 2>/dev/null || true
-      rm -f "${HOME}/.config/systemd/user/${SERVICE_NAME}"
-      systemctl --user daemon-reload
+      run systemctl --user disable --now "$SERVICE_NAME"
+      run rm -f "${HOME}/.config/systemd/user/${SERVICE_NAME}"
+      run systemctl --user daemon-reload
       ;;
     darwin)
-      launchctl bootout "gui/$(id -u)/${LAUNCHD_LABEL}" 2>/dev/null || true
-      rm -f "${HOME}/Library/LaunchAgents/${LAUNCHD_LABEL}.plist"
+      run launchctl bootout "gui/$(id -u)/${LAUNCHD_LABEL}"
+      run rm -f "${HOME}/Library/LaunchAgents/${LAUNCHD_LABEL}.plist"
       ;;
   esac
-  pkill -f "$INSTALL_BIN" 2>/dev/null || true
+  run pkill -f "$INSTALL_BIN"
   log "  已清理服务与进程"
   log "  数据目录 $DATA_DIR 保留（如需清空请手动 rm -r）"
   exit 0
@@ -81,7 +99,7 @@ fi
 mkdir -p "${HOME}/.local/bin" "$DATA_DIR"
 
 # 拷 binary
-install -m 0755 "$BIN_SRC" "$INSTALL_BIN"
+run install -m 0755 "$BIN_SRC" "$INSTALL_BIN"
 log "已安装 → $INSTALL_BIN"
 
 # 默认 config
@@ -121,8 +139,8 @@ RestartSec=3
 [Install]
 WantedBy=default.target
 UNIT
-      systemctl --user daemon-reload
-      systemctl --user enable --now "$SERVICE_NAME"
+      run systemctl --user daemon-reload
+      run systemctl --user enable --now "$SERVICE_NAME"
       log "已注册 systemd --user unit（loginctl enable-linger \$USER 后才真正开机自启）"
       ;;
     darwin)
@@ -147,7 +165,7 @@ UNIT
 </dict>
 </plist>
 PLIST
-      launchctl bootstrap "gui/$(id -u)" "${HOME}/Library/LaunchAgents/${LAUNCHD_LABEL}.plist"
+      run launchctl bootstrap "gui/$(id -u)" "${HOME}/Library/LaunchAgents/${LAUNCHD_LABEL}.plist"
       log "已注册 launchd agent"
       ;;
   esac
@@ -155,9 +173,13 @@ fi
 
 # 立即启动（如果没装服务）
 if [[ $NO_AUTOSTART -eq 1 ]]; then
-  nohup "$INSTALL_BIN" --config "$CONFIG" >"$DATA_DIR/stdout.log" 2>"$DATA_DIR/stderr.log" &
-  sleep 1
-  log "已后台启动（PID=$!，日志 $DATA_DIR/）"
+  if [[ $DRY_RUN -eq 1 ]]; then
+    printf '  [dry-run] nohup %s --config %s &\n' "$INSTALL_BIN" "$CONFIG"
+  else
+    nohup "$INSTALL_BIN" --config "$CONFIG" >"$DATA_DIR/stdout.log" 2>"$DATA_DIR/stderr.log" &
+    sleep 1
+    log "已后台启动（PID=$!，日志 $DATA_DIR/）"
+  fi
 fi
 
 # 健康检查

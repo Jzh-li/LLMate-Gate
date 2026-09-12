@@ -4,6 +4,76 @@
 
 > Your LLM's privacy gatekeeper for the Chinese-speaking world.
 
+> 🌏 **语言策略：本项目以中文为主，关键文档均中文撰写**  
+> PII 模型 + 仿真语料 + 评估器均针对中文场景训练/构造。  
+> 英文使用者欢迎提 issue / PR 帮我们翻译 README 与关键文档；现阶段中文是事实工作语言。
+
+## 🚀 5 分钟 Quickstart
+
+### 装（已发布 Release）
+
+```bash
+# macOS (Apple Silicon)
+curl -L -o /tmp/lg https://github.com/Jzh-li/LLMate-Gate/releases/latest/download/llmate-gate-darwin-arm64
+chmod +x /tmp/lg && sudo mv /tmp/lg /usr/local/bin/llmate-gate
+
+# Linux (x86_64)
+curl -L -o /tmp/lg https://github.com/Jzh-li/LLMate-Gate/releases/latest/download/llmate-gate-linux-amd64
+chmod +x /tmp/lg && sudo mv /tmp/lg /usr/local/bin/llmate-gate
+
+# Windows (PowerShell)
+Invoke-WebRequest -Uri 'https://github.com/Jzh-li/LLMate-Gate/releases/latest/download/llmate-gate-windows-amd64.exe' -OutFile 'llmate-gate.exe'
+```
+
+### 跑（30 秒可起）
+
+```bash
+# 1. 起 mock-llm + llmate-gate（仅验证产品形态，不需要真 API key）
+llmate-gate --config ./gateway/configs/e2e-llm.yaml --listen :8400 &
+mock-llm --listen :8999 &
+
+# 2. 健康检查
+curl http://127.0.0.1:8400/healthz
+
+# 3. 试一发
+curl -X POST http://127.0.0.1:8400/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "gpt-4",
+    "messages": [{"role":"user","content":"我叫李雷，手机13800138000，请回拨"}]
+  }'
+# 响应里 PII 已被替换；调试面板 http://127.0.0.1:8400/_debug 看审计日志
+```
+
+### 接 Cursor / Continue / Claude Code
+
+改一行 base_url 即可：
+
+```python
+# Python OpenAI SDK
+openai.api_base = "http://127.0.0.1:8400/v1"
+```
+
+```ts
+// Node.js / TypeScript
+const openai = new OpenAI({
+  baseURL: "http://127.0.0.1:8400/v1",
+});
+```
+
+### 真接 LLM（要 API key）
+
+```bash
+cat > ~/.local/share/llmate-gate/config.yaml <<EOF
+gateway:
+  listen: ":8400"
+  upstream:
+    base_url: "https://api.openai.com"
+    api_key: "$OPENAI_API_KEY"
+EOF
+llmate-gate --config ~/.local/share/llmate-gate/config.yaml
+```
+
 ## 🎯 为什么需要 LLMate Gate
 
 把用户原文直接发给大模型，风险来自三个层面：传输与存储（数据离开你的可控边界）、可观测性副作用（Langfuse/ELK 等日志系统成为巨大 PII 泄露面）、模型输出反向泄露（模型可能在回答里复述、拼接甚至"脑补"出用户的敏感信息）。
@@ -357,6 +427,32 @@ LLMate Gate 的审计日志是结构化的，每条记录包含：
 
 ## 📈 性能基准
 
+### 真对抗语料（28 条「真对抗 F1」，推荐阅读）
+
+> 实测时点 **2026-09-12**，引擎 `detection.engine=regex`，语料 `bench/fixtures/cases_adversarial.jsonl`（28 条手写真对抗样本）。
+> 报告原文：`bench/reports/adversarial_20260912-195233.md`。
+
+| 指标 | 实测 | 含义 |
+| --- | --- | --- |
+| **真对抗 F1** | **0.7458** | 真对抗语料 (type, value) 严格匹配 |
+| 精确率 (P) | 0.9565 | 报出来的里面有 96% 是真 PII |
+| 召回率 (R) | 0.6111 | 真 PII 里有 61% 被找到 |
+| 检测 p99 延迟 | 24ms | `/_api/privacy/redact gate_only=true` |
+
+**按子集（F1）**：
+
+| 子集 | F1 | 说明 |
+| --- | --- | --- |
+| email / ip_address / phone | **1.0** | 格式规则严格，regex 引擎完全覆盖 |
+| mixed（含 tool_call） | 0.86 | 多类型混排，地址部分漏报 |
+| person_name / address | **0.0** | 中文姓名 + 中文地址当前 regex **未覆盖** |
+| id_card_masked | 0.0 | 已知弱项（`********` 遮蔽格式） |
+
+> 💡 **为什么这比合成语料数字更重要**：合成语料 F1=1.0 是过拟合基线（生成器按检测器算法写样本）；真对抗语料是手写真实场景样本，暴露当前 regex 引擎的盲区。
+> v1.1+ 引入 PII Engineer（中文 NER F1 0.918）将主要补齐 person_name + address 两块。
+
+### 合成语料（240 条参考基线）
+
 > 实测时点 **2026-09-10**，引擎 `detection.engine=regex`（内置正则），语料 `bench/fixtures/cases.jsonl`（240 条合成样本，8 子集 × 30）。
 > 报告原文：`bench/reports/phase0_regex-v2_20260910-214153.md`。
 
@@ -369,7 +465,7 @@ LLMate Gate 的审计日志是结构化的，每条记录包含：
 | 内存占用 | - | 未测 | 待补 |
 
 > ⚠️ **两点诚实说明**
-> 1. 语料为**合成样本**，不代表真实分布；真实对抗语料待补（决定是否需要 NER）。
+> 1. 合成语料不代表真实分布；**真对抗数字 0.7458 更值得引用**（见上节）。
 > 2. §16 第 2 项原意是"Agent 多轮对话端到端 P99"，当前只有**检测端点**的 p99；**端到端多轮未压测**，故该项不宣称达成（详见 `V1_READINESS.md`）。
 > 3. 上一版 README 中的 "91.8% / 1.2s / ~180ms / 80-200MB" 来自 **PII Engineer 的公开规格**（`Specs/00` 附录 A），**不是本项目实测值**，已更正。
 
@@ -383,7 +479,7 @@ LLMate Gate 的审计日志是结构化的，每条记录包含：
 | Kiji | ❌ | 仅 6 语言 | ❓ 待测 | ❓ | ❌ 英文中心 Go |
 | Eidolon | ❌ | ✅ 英文 | ❌ | ❌ | Rust，快 |
 | AI Privacy Gateway | ✅ | 正则 | ❌ | ❌ | Python |
-| **LLMate Gate（实测）** | ✅ F1 **1.0**（合成语料） | ⏳ v1.1 | ✅ 键保留递归扫描 | ✅ 独占 | Go，检测 p99 23ms |
+| **LLMate Gate（实测）** | ✅ F1 **0.7458**（真对抗）/ 1.0（合成） | ⏳ v1.1 | ✅ 键保留递归扫描 | ✅ 独占 | Go，检测 p99 23ms |
 
 ## 🗺️ 路线图
 
@@ -429,12 +525,34 @@ Copyright 2026 LLMate Gate Contributors
 
 ## 🤝 贡献
 
-欢迎 PR 和 Issue！特别是：
+完整指南见 [CONTRIBUTING.md](./CONTRIBUTING.md)：
 
+- 开发环境（Go 1.25+ / dev.sh 自动 scratch）
+- PR 流程（先 issue → fork → branch → CI 全绿）
+- Conventional Commits 规范
+- Code Review 标准（正确性 / 测试 / 可观测 / 可回滚）
+- 范围边界（欢迎 / 慎重 / 不接）
+
+**特别欢迎**：
 - 中文实体类型的检测规则补充
 - 仿真替换的中文 locale 扩展
 - 更多 LLM 上游的适配
 - cn-pii-bench 基准数据集扩充
+- 文档翻译与错别字
+
+## 🛡️ 安全
+
+漏洞**请勿**在 Issue 公开提交，走私密渠道：[SECURITY.md](./SECURITY.md)。
+
+| 阶段 | 目标时间 |
+|---|---|
+| 确认接收 | 48 小时内 |
+| Critical 漏洞修复 | 48 小时内发版 |
+| High 漏洞修复 | 7 天 |
+
+## 📜 行为准则
+
+所有互动需遵循 [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)（Contributor Covenant v2.1）。
 
 ## ⚠️ 免责声明
 

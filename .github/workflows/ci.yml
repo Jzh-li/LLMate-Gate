@@ -75,7 +75,7 @@ jobs:
           CGO_ENABLED=0 go build -o ../build/mock-llm ./cmd/mock-llm
           CGO_ENABLED=0 go build -o ../build/mock-detector ./cmd/mock-detector
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: llmate-gate-linux-amd64
           path: |
@@ -160,7 +160,7 @@ jobs:
             }
           ' test.log
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: coverage-report
           path: |
@@ -228,10 +228,10 @@ jobs:
 
       # 静态分析门禁：规则集见 gateway/.golangci.yml（errcheck/govet/staticcheck/
       # unused/ineffassign/misspell/unconvert/copyloopvar，2026-09-12 本地清零）。
-      # 固定 golangci-lint v2.6.1：官方 action 用预编译二进制，避免 go install 受 module
+      # 固定 golangci-lint v2.6.1：官方 action v7 预编译二进制，避免 go install 受 module
       # go directive 限制；v2.13.2 起要求 Go >=1.26，当前 CI 锁定 Go 1.24.9。
       - name: lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: v2.6.1
           args: --timeout 5m --config .golangci.yml
@@ -273,7 +273,7 @@ jobs:
             git push
           fi
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: bench-current
           path: bench_current.txt
@@ -286,16 +286,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v6
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-          cache-dependency-path: gateway/go.sum
-
-      # govulncheck：扫描 Go 工具链已知漏洞。GO_VERSION=1.24.9 已修复 stdlib 漏洞；
-      # 仅当存在「可达」漏洞时非零退出（未调用的间接依赖漏洞不阻断）。
+      # 官方 govulncheck action：自带工具安装，避免 go install @latest 因上游 Go
+      # 版本要求漂移。GO_VERSION=1.24.9 已修复 stdlib 漏洞；仅当存在「可达」漏洞时非零退出。
       - name: 漏洞扫描
-        working-directory: gateway
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          "$(go env GOPATH)/bin/govulncheck" ./...
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-input: ${{ env.GO_VERSION }}
+          go-package: ./...
+          work-dir: gateway
+          repo-checkout: false

@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 env:
-  GO_VERSION: '1.24.9'
+  GO_VERSION: '1.25.13'
   GOPROXY: https://proxy.golang.org,direct
 
 # ✅ 2026-09-12 已采纳「方案①——补齐门禁」（SPEC_ALIGNMENT C13 / Q11 收口）：

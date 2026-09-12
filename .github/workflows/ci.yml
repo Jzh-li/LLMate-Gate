@@ -228,10 +228,10 @@ jobs:
 
       # 静态分析门禁：规则集见 gateway/.golangci.yml（errcheck/govet/staticcheck/
       # unused/ineffassign/misspell/unconvert/copyloopvar，2026-09-12 本地清零）。
-      # 固定 golangci-lint v2.6.1：官方 action v7 预编译二进制，避免 go install 受 module
-      # go directive 限制；v2.13.2 起要求 Go >=1.26，当前 CI 锁定 Go 1.24.9。
+      # 固定 golangci-lint v2.6.1：官方 action v9 预编译二进制，避免 go install 受 module
+      # go directive 限制；v9 为 Node 24 runtime。v2.13.2 起要求 Go >=1.26。
       - name: lint
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@v9
         with:
           version: v2.6.1
           args: --timeout 5m --config .golangci.yml
@@ -286,12 +286,16 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # 官方 govulncheck action：自带工具安装，避免 go install @latest 因上游 Go
-      # 版本要求漂移。GO_VERSION=1.24.9 已修复 stdlib 漏洞；仅当存在「可达」漏洞时非零退出。
-      - name: 漏洞扫描
-        uses: golang/govulncheck-action@v1
+      - uses: actions/setup-go@v6
         with:
-          go-version-input: ${{ env.GO_VERSION }}
-          go-package: ./...
-          work-dir: gateway
-          repo-checkout: false
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: gateway/go.sum
+
+      # govulncheck：扫描 Go 工具链已知漏洞。固定 v1.1.4（go.mod go 1.22，兼容
+      # CI Go 1.24.9）；v1.2.0 起要求 Go >=1.26。仅当存在「可达」漏洞时非零退出。
+      - name: 漏洞扫描
+        working-directory: gateway
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          "$(go env GOPATH)/bin/govulncheck" ./...

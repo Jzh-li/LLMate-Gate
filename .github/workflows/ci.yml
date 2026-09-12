@@ -228,12 +228,14 @@ jobs:
 
       # 静态分析门禁：规则集见 gateway/.golangci.yml（errcheck/govet/staticcheck/
       # unused/ineffassign/misspell/unconvert/copyloopvar，2026-09-12 本地清零）。
-      # 直接 go install 官方 CLI，避免第三方 action 版本漂移。
+      # 固定 golangci-lint v2.6.1：官方 action 用预编译二进制，避免 go install 受 module
+      # go directive 限制；v2.13.2 起要求 Go >=1.26，当前 CI 锁定 Go 1.24.9。
       - name: lint
-        working-directory: gateway
-        run: |
-          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
-          "$(go env GOPATH)/bin/golangci-lint" run ./... --timeout 5m
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.6.1
+          args: --timeout 5m --config .golangci.yml
+          working-directory: gateway
 
   perf:
     name: bench perf guard

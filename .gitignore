@@ -18,6 +18,7 @@ node_modules/
 dist/
 target/
 vscode-ext/out/
+.build/
 
 # Python 编译产物
 __pycache__/

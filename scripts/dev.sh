@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
 # LLMate Gate 开发辅助脚本
 #
-# 背景（环境验证结论）：本仓库工作区位于 WSL 的 9P 网络共享
-# (\\wsl.localhost\Debian\...)，Go 工具链无法对该路径上的 go.mod 加文件锁
-# （报错：RLock ...\go.mod: Incorrect function），因此 `go build/test` 必须
-# 在**本地 NTFS 目录**执行。本脚本负责把源码同步到本地 scratch 目录再编译。
+# 背景（环境验证结论）：当仓位于 WSL 的 9P 网络共享 (\\wsl.localhost\...)
+# 时，Go 工具链无法对路径上的 go.mod 加文件锁（报错：RLock ...\go.mod:
+# Incorrect function），因此 go build/test 必须在一个**本机文件系统**的
+# scratch 目录里执行。本脚本负责把源码 rsync 到 scratch 目录再编译。
+#
+# 默认 scratch 目录：
+#   - 仓不在 9P（普通 Linux/macOS）   → 仓内 .build/   （.gitignore 已忽略）
+#   - 仓在 9P（WSL 远程挂载）         → mktemp -d 一次性目录，脚本退出后保留
+#   用户可通过 env 覆盖：LMGATE_BUILD=/path  强制 scratch 目录
 #
 # 用法：
 #   ./scripts/dev.sh envcheck    # 环境验证
-#   ./scripts/dev.sh sync        # 同步源码到构建目录
+#   ./scripts/dev.sh sync        # 同步源码到 scratch 目录
 #   ./scripts/dev.sh build       # 编译二进制
 #   ./scripts/dev.sh test        # 跑测试（含覆盖率）
 #   ./scripts/dev.sh vet         # 静态检查
@@ -16,11 +21,28 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# 本地 NTFS 构建目录（可通过 LMGATE_BUILD 覆盖）
-BUILD_DIR="${LMGATE_BUILD:-/c/Users/jzh-l/AppData/Local/Temp/lmgate}"
+
+# 判断仓是否在 WSL 9P 路径下（路径含 //wsl.localhost/、\\wsl.localhost\、/9p/）。
+is_9p_workspace() {
+  case "$REPO_ROOT" in
+    *9p*|*"\\wsl"*|*"/wsl.localhost"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# 默认 scratch 目录：非 9P 用仓内 .build/；9P 退回一次性 mktemp 目录。
+default_build_dir() {
+  if is_9p_workspace; then
+    mktemp -d -t lmgate-build.XXXXXX
+  else
+    printf '%s' "$REPO_ROOT/.build"
+  fi
+}
+
+BUILD_DIR="${LMGATE_BUILD:-$(default_build_dir)}"
 SRC_DIR="${BUILD_DIR}/gateway"
 
-# Go 模块代理：proxy.golang.org 在本机不可达，使用 goproxy.cn
+# Go 模块代理：proxy.golang.org 在国内常不可达，使用 goproxy.cn
 export GOPROXY="${GOPROXY:-https://goproxy.cn,direct}"
 export GOSUMDB="${GOSUMDB:-sum.golang.google.cn}"
 export GOFLAGS="${GOFLAGS:--mod=mod}"
@@ -55,15 +77,18 @@ envcheck() {
   printf '%-24s %s\n' "goproxy.cn" "$code"
   [ "$code" = "200" ] || { log "WARN goproxy.cn 不可达，go mod tidy 可能失败"; ok=0; }
 
-  # go.mod 文件锁能力（WSL UNC 路径会失败）
+  # go.mod 文件锁能力（9P 路径会失败，所以 scratch 已自动落到本机 fs）
   mkdir -p "$BUILD_DIR"
-  if go -C "$BUILD_DIR" version >/dev/null 2>&1 || true; then :; fi
   if (cd "$BUILD_DIR" && go env GOMODCACHE >/dev/null 2>&1); then
-    printf '%-24s %s\n' "local_fs_lock" "OK"
+    printf '%-24s %s\n' "local_fs_lock" "OK ($BUILD_DIR)"
   else
     printf '%-24s %s\n' "local_fs_lock" "FAIL"; ok=0
   fi
-  printf '%-24s %s\n' "workspace_lock" "SKIP (9P share 不支持，改用 $BUILD_DIR 构建)"
+  if is_9p_workspace; then
+    printf '%-24s %s\n' "workspace_path" "9P（scratch 已自动避开）"
+  else
+    printf '%-24s %s\n' "workspace_path" "本机 fs（直接仓内构建即可）"
+  fi
 
   [ "$ok" = "1" ] && log "=== 环境验证通过 ===" || { log "=== 环境验证存在告警 ==="; return 0; }
 }

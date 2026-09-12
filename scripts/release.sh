@@ -31,7 +31,8 @@ cd "$REPO_ROOT"
 
 VERSION="${1:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
 FILTER="${2:-all}"
-OUT_DIR="${LMGBUILD:-/c/Users/jzh-l/AppData/Local/Temp/lmgate}/dist"
+# 默认 dist 目录：仓内 .build/dist（.gitignore 已忽略）；可通过 LMGBUILD 覆盖
+OUT_DIR="${LMGBUILD:-$REPO_ROOT/.build/dist}"
 LMGDIR="${LMGDIR:-$REPO_ROOT}"
 
 # CGO 必须禁用，否则 _third_party 库会引入 glibc 依赖，跨发行版会挂
@@ -42,13 +43,25 @@ export GOSUMDB="${GOSUMDB:-sum.golang.google.cn}"
 log()  { printf '[release] %s\n' "$*"; }
 fail() { printf '[release][FAIL] %s\n' "$*" >&2; exit 1; }
 
-# 如果 LMGDIR 是源码目录，临时同步到 NTFS scratch 编译（与 dev.sh 同源问题）
+# 检测仓是否在 WSL 9P 路径下
+is_9p_workspace() {
+  case "$REPO_ROOT" in
+    *9p*|*"\\wsl"*|*"/wsl.localhost"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# 当 LMGDIR 是 9P 路径下的源码目录时，临时借用 dev.sh 的 scratch 逻辑同步编译。
+# 非 9P 下 LMGDIR 通常已经是本机 fs，直接原地构建即可，无需额外同步。
 prepare_build() {
-  local local_build="${LMGBUILD:-/c/Users/jzh-l/AppData/Local/Temp/lmgate}/gateway"
-  if [[ -d "$local_build" ]] && [[ "$REPO_ROOT" == *wsl* || "$REPO_ROOT" == *9p* ]]; then
-    log "检测到 WSL 9P 路径，使用本地 NTFS scratch：$local_build"
+  if [[ "$REPO_ROOT" == "$LMGDIR" ]] && is_9p_workspace; then
+    log "检测到 WSL 9P 路径，使用 dev.sh 同步到 scratch 目录编译"
     bash "$REPO_ROOT/scripts/dev.sh" sync
-    LMGDIR="$local_build"
+    LMGDIR="$LMGATE_BUILD"
+    if [[ -z "$LMGDIR" || ! -d "$LMGDIR/gateway" ]]; then
+      # dev.sh 默认 scratch（mktemp）未知具体路径；保守回退
+      LMGDIR="$LMGDIR/gateway"
+    fi
   fi
 }
 

@@ -180,6 +180,9 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: true
+          # cn-pii-bench 为私有仓：需 repo secret SUBMODULE_TOKEN（fine-grained PAT，
+          # 对 Jzh-li/cn-pii-bench 至少含 Contents: read；推荐用 classic PAT 加 repo scope 最简）。
+          token: ${{ secrets.SUBMODULE_TOKEN }}
 
       # 不引入 setup-python：runner 自带 python3 足够，少一个 Node20 action 依赖
       - name: 校验 cn-pii-bench fixture
@@ -196,6 +199,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: true
+          token: ${{ secrets.SUBMODULE_TOKEN }}
 
       - uses: actions/setup-go@v6
         with:

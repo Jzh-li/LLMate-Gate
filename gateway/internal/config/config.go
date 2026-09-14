@@ -11,6 +11,7 @@ import (
 	"time"
 
 	gatewayerrors "gateway/internal/errors"
+	"gateway/internal/simulator"
 	"gateway/pkg/types"
 
 	"gopkg.in/yaml.v3"
@@ -112,6 +113,10 @@ type SimulateZHConfig struct {
 	// Dictionary 用户自定义词典：entity_type → (真实值 → 仿真值)。
 	// 命中者用你的仿真值，未命中回落内置词表 + HMAC 派生。
 	Dictionary map[string]map[string]string `yaml:"dictionary"`
+	// IdentityCard 身份卡：entity_type → 真实值（每种类型一个）。加载期用固定密钥
+	// 为其生成格式保持、跨重启稳定的仿真值，展开进 Dictionary（手写词典优先）。
+	// 它是 dictionary 的糖，不引入第二条运行时路径。
+	IdentityCard map[string]string `yaml:"identity_card"`
 }
 
 // PolicyConfig 安全策略。
@@ -240,10 +245,44 @@ func Load(path string) (*Config, error) {
 		}
 	}
 	expandEnvDeep(c)
+	if err := c.expandIdentityCard(); err != nil {
+		return nil, err
+	}
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
 	return c, nil
+}
+
+// expandIdentityCard 把 identity_card 展开进 Dictionary（身份卡 → 词典的糖）。
+//
+// 在 Validate 之前做：展开后的词典与手写词典一起过全局唯一校验，身份卡的仿真值与
+// 手写仿真值撞车同样能在启动期被拦下。手写词典优先——同一 (类型, 真实值) 若两边都
+// 写了，以手写为准（用户显式给出的仿真值不被身份卡覆盖）。
+func (c *Config) expandIdentityCard() error {
+	card := c.Replacement.SimulateZH.IdentityCard
+	if len(card) == 0 {
+		return nil
+	}
+	expanded, err := simulator.ExpandIdentityCard(card)
+	if err != nil {
+		return gatewayerrors.Errorf(gatewayerrors.CodeInvalidConfig,
+			"expand replacement.simulate_zh.identity_card: %v", err)
+	}
+	if c.Replacement.SimulateZH.Dictionary == nil {
+		c.Replacement.SimulateZH.Dictionary = make(map[string]map[string]string)
+	}
+	for entityType, pairs := range expanded {
+		if c.Replacement.SimulateZH.Dictionary[entityType] == nil {
+			c.Replacement.SimulateZH.Dictionary[entityType] = make(map[string]string)
+		}
+		for real, fake := range pairs {
+			if _, exists := c.Replacement.SimulateZH.Dictionary[entityType][real]; !exists {
+				c.Replacement.SimulateZH.Dictionary[entityType][real] = fake
+			}
+		}
+	}
+	return nil
 }
 
 // Validate 启动期一次性校验（契约 §3.3）。失败即退出，不做降级。

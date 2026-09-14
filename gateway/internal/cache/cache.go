@@ -17,6 +17,8 @@ type Cache interface {
 	Get(conversationID string, textHash [32]byte) (*types.DetectResponse, bool)
 	Put(conversationID string, textHash [32]byte, resp *types.DetectResponse) error
 	Invalidate(conversationID string) error
+	// Flush 整体失效：检测的输入侧变了（如登记表补录），缓存键查不出过期。
+	Flush()
 	// Sweep 清理过期条目。
 	Sweep() int
 }
@@ -146,6 +148,20 @@ func (c *LRU) Invalidate(conversationID string) error {
 		}
 	}
 	return nil
+}
+
+// Flush 整体失效，清空所有会话的所有条目（hit/miss 计数保留）。
+//
+// 与 Invalidate("") 不同：bindConv 开启时 Invalidate 按 conversationID 匹配，
+// 空串只能清掉「无会话」的条目、清不到真实会话，所以需要这个显式入口。
+//
+// 使用场景：检测的**输入侧**变了（登记表补录），而缓存键只由文本哈希构成，
+// 查不出结果已过期——只能整体作废。
+func (c *LRU) Flush() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.items = make(map[string]*entry)
+	c.order.Init()
 }
 
 // Stats 命中/未命中计数，供 /metrics。

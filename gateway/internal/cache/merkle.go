@@ -140,6 +140,17 @@ func (m *MerkleCache) Invalidate(convID string) {
 	delete(m.conv, convID)
 }
 
+// Clear 清空所有会话的缓存。
+//
+// 与 Invalidate 一样按会话隔离是正确性所需，但当检测的**输入侧**整体变化时
+// （登记表补录了一个值），每个会话的缓存段都可能是「当时没检出、现在该检出」的，
+// 没有哪个会话是安全的，只能全清。
+func (m *MerkleCache) Clear() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.conv = map[string]*convEntry{}
+}
+
 // Sweep 清理过期会话。
 func (m *MerkleCache) Sweep() int {
 	now := time.Now()

@@ -292,8 +292,13 @@ func TestProxy_ToolCall_ArgumentsString(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(tp.lastUp()), &up))
 	tcs := up["tool_calls"].([]interface{})
 	fn := tcs[0].(map[string]interface{})["function"].(map[string]interface{})
-	args, ok := fn["arguments"].(map[string]interface{})
-	require.True(t, ok, "arguments 应为脱敏后的对象")
+	// arguments 为 JSON 字符串 → 脱敏后仍须是字符串（OpenAI 线上格式），
+	// 不能被改写成 object，否则上游按 string 反序列化会报 invalid type: map。
+	argsStr, ok := fn["arguments"].(string)
+	require.True(t, ok, "arguments 应保持为字符串")
+
+	var args map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(argsStr), &args))
 
 	// 键保留
 	require.Contains(t, args, "api_key")

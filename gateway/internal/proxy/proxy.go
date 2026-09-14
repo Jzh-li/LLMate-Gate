@@ -366,7 +366,18 @@ func (p *Proxy) anonymizeJSONString(v interface{}, anon func(string) (string, er
 		if err := json.Unmarshal([]byte(x), &parsed); err != nil {
 			return v, nil // 非 JSON：保持原样
 		}
-		return p.transform(parsed, true, anon)
+		transformed, err := p.transform(parsed, true, anon)
+		if err != nil {
+			return nil, err
+		}
+		// arguments 为 JSON 字符串（OpenAI 常见形态）时必须序列化回字符串：
+		// 直接返回 map 会把线上 wire format 从 string 改成 object，上游（如
+		// DeepSeek）按 string 反序列化会报 invalid type: map, expected a string。
+		buf, err := marshalNoEscape(transformed)
+		if err != nil {
+			return nil, err
+		}
+		return string(bytes.TrimRight(buf, "\n")), nil
 	case map[string]interface{}, []interface{}:
 		return p.transform(x, true, anon)
 	default:

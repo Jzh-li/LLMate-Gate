@@ -19,7 +19,7 @@ import (
 type Replacer interface {
 	Replace(ctx context.Context, req *ReplaceRequest) (*ReplaceResult, error)
 	Restore(ctx context.Context, req *RestoreRequest) (string, error)
-	// Strategy 当前替换策略（placeholder | simulate）。
+	// Strategy 当前替换策略（placeholder | simulate | bypass）。
 	Strategy() string
 	// SetStrategy 热加载替换策略（线程安全）。
 	SetStrategy(string) error
@@ -87,10 +87,10 @@ func (r *impl) Strategy() string {
 	return r.cfg.Strategy
 }
 
-// SetStrategy 热加载替换策略（线程安全）。仅允许 placeholder / simulate / 空（=placeholder）。
+// SetStrategy 热加载替换策略（线程安全）。仅允许 placeholder / simulate / bypass / 空（=placeholder）。
 func (r *impl) SetStrategy(s string) error {
 	switch s {
-	case "", "placeholder", "simulate":
+	case "", "placeholder", "simulate", "bypass":
 	default:
 		return fmt.Errorf("invalid strategy %q", s)
 	}
@@ -178,7 +178,7 @@ type Session struct {
 // SetStrategy 热加载替换策略（线程安全）。
 func (s *Session) SetStrategy(str string) error {
 	switch str {
-	case "", "placeholder", "simulate":
+	case "", "placeholder", "simulate", "bypass":
 	default:
 		return fmt.Errorf("invalid strategy %q", str)
 	}

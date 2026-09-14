@@ -169,6 +169,10 @@ func (p *Proxy) Handle(w http.ResponseWriter, r *http.Request, endpoint string, 
 
 // anonymizeBody 解析 JSON 请求体并脱敏 PII 字段，返回脱敏后 body 与映射条目。
 func (p *Proxy) anonymizeBody(ctx context.Context, body []byte, reqID, convID string) (newBody []byte, entries []types.MappingEntry, err error) {
+	// bypass：整条请求原样透传。不写映射表（entries 为空 → 响应侧还原器空转）。
+	if p.proc.Strategy() == "bypass" {
+		return body, nil, nil
+	}
 	var doc interface{}
 	if jerr := json.Unmarshal(body, &doc); jerr != nil {
 		// 非 JSON：整段当作文本脱敏（如纯文本 prompt）

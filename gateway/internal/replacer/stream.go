@@ -30,6 +30,10 @@ type StreamRestorer struct {
 
 // NewStreamRestorer 基于映射条目构造流式还原器。
 func NewStreamRestorer(entries []entryPair) *StreamRestorer {
+	if len(entries) == 0 {
+		// table 留 nil → Write 直接原样透传（bypass 模式每次请求都走这里）。
+		return &StreamRestorer{}
+	}
 	t := make(map[string]string, len(entries))
 	for _, e := range entries {
 		t[e.sentinel] = e.restoreTo

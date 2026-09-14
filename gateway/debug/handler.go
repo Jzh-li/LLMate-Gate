@@ -352,8 +352,10 @@ func (h *Handler) handleRules(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
-		if req.Strategy != "placeholder" && req.Strategy != "simulate" {
-			writeErr(w, http.StatusBadRequest, "invalid_request", "strategy must be placeholder|simulate")
+		switch req.Strategy {
+		case "placeholder", "simulate", "bypass":
+		default:
+			writeErr(w, http.StatusBadRequest, "invalid_request", "strategy must be placeholder|simulate|bypass")
 			return
 		}
 		h.rulesMu.Lock()

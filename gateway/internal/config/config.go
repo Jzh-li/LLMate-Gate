@@ -255,7 +255,7 @@ func (c *Config) Validate() error {
 		c.Gateway.RequestTimeout = 30 * time.Second
 	}
 	switch c.Replacement.Strategy {
-	case "placeholder", "simulate":
+	case "placeholder", "simulate", "bypass":
 	default:
 		return gatewayerrors.Errorf(gatewayerrors.CodeInvalidConfig, "unknown replacement.strategy: %q", c.Replacement.Strategy)
 	}

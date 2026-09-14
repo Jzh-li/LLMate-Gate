@@ -59,6 +59,29 @@ func IrreversibleTypes() []string {
 	return []string{EntityAPIKey, EntityPassword, EntityToken}
 }
 
+// AllTypes 全部实体类型（契约 §6.1 权威表），顺序与规范表格一致。
+//
+// 需要「有哪些类型可选」的地方（面板下拉、登记表校验、配置校验）统一用它，
+// 避免各处各维护一份、新增类型时漏改。返回副本，调用方可以随便改。
+func AllTypes() []string {
+	return []string{
+		EntityPersonName, EntityPhone, EntityIDCard, EntityBankCard, EntityAddress,
+		EntityEmail, EntityIPAddress, EntityDate,
+		EntityAPIKey, EntityPassword, EntityToken,
+		EntityPlate, EntityURL, EntityUSSSN, EntityCreditCard,
+	}
+}
+
+// IsKnownType 该实体类型是否在契约 §6.1 的权威表内。
+func IsKnownType(entityType string) bool {
+	for _, t := range AllTypes() {
+		if t == entityType {
+			return true
+		}
+	}
+	return false
+}
+
 // IsIrreversible 该实体类型是否为不可逆（redact）。
 func IsIrreversible(entityType string) bool {
 	for _, t := range IrreversibleTypes() {

@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"gateway/pkg/types"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -116,4 +118,118 @@ func TestConfig_StringNeverLeaksToken(t *testing.T) {
 	c := Default()
 	c.Gateway.AuthToken = "super-secret"
 	require.NotContains(t, c.String(), "super-secret")
+}
+
+// ---------- 仿真词典 ----------
+
+// TestValidateSimulateDictionary 词典校验规则（配置加载期与面板热加载共用）。
+func TestValidateSimulateDictionary(t *testing.T) {
+	t.Run("合法", func(t *testing.T) {
+		require.NoError(t, ValidateSimulateDictionary(map[string]map[string]string{
+			types.EntityPersonName: {"张三": "王五", "李四": "赵六"},
+			types.EntityAddress:    {"北京市朝阳区": "上海市浦东新区"},
+		}))
+	})
+	t.Run("空词典", func(t *testing.T) {
+		require.NoError(t, ValidateSimulateDictionary(nil))
+		require.NoError(t, ValidateSimulateDictionary(map[string]map[string]string{}))
+	})
+	t.Run("未知类型", func(t *testing.T) {
+		err := ValidateSimulateDictionary(map[string]map[string]string{
+			"zh_person": {"张三": "王五"},
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "non-simulatable")
+	})
+	t.Run("不可逆类型被拒", func(t *testing.T) {
+		// api_key 走 redact、不参与仿真；列进词典会让用户误以为能控制它的假值
+		err := ValidateSimulateDictionary(map[string]map[string]string{
+			types.EntityAPIKey: {"sk-real": "sk-fake"},
+		})
+		require.Error(t, err)
+	})
+	t.Run("同类型仿真值重复", func(t *testing.T) {
+		err := ValidateSimulateDictionary(map[string]map[string]string{
+			types.EntityPersonName: {"张三": "王五", "李四": "王五"},
+		})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "restore would break")
+	})
+	t.Run("跨类型仿真值重复同样被拒", func(t *testing.T) {
+		// 还原表是平表、不分类型分桶，跨类型撞车一样会互相覆盖
+		err := ValidateSimulateDictionary(map[string]map[string]string{
+			types.EntityPersonName: {"张三": "王五"},
+			types.EntityAddress:    {"北京市": "王五"},
+		})
+		require.Error(t, err)
+	})
+	t.Run("空真实值", func(t *testing.T) {
+		require.Error(t, ValidateSimulateDictionary(map[string]map[string]string{
+			types.EntityPersonName: {"   ": "王五"},
+		}))
+	})
+	t.Run("空仿真值", func(t *testing.T) {
+		require.Error(t, ValidateSimulateDictionary(map[string]map[string]string{
+			types.EntityPersonName: {"张三": "  "},
+		}))
+	})
+}
+
+// TestSimulateDictionary_LoadedFromYAML 词典能从配置读进来。
+func TestSimulateDictionary_LoadedFromYAML(t *testing.T) {
+	p := writeConfig(t, `
+gateway:
+  listen: ":8400"
+  upstream: "http://127.0.0.1:15721"
+replacement:
+  strategy: "simulate"
+  simulate_zh:
+    dictionary:
+      zh_person_name:
+        "张三": "王五"
+      zh_address:
+        "北京市朝阳区": "上海市浦东新区"
+`)
+	c, err := Load(p)
+	require.NoError(t, err)
+	require.Equal(t, "王五", c.Replacement.SimulateZH.Dictionary["zh_person_name"]["张三"])
+	require.Equal(t, "上海市浦东新区", c.Replacement.SimulateZH.Dictionary["zh_address"]["北京市朝阳区"])
+}
+
+// TestSimulateDictionary_BadYAMLFailsLoad 非法词典必须在加载期拦下，不能带病启动。
+func TestSimulateDictionary_BadYAMLFailsLoad(t *testing.T) {
+	p := writeConfig(t, `
+gateway:
+  listen: ":8400"
+  upstream: "http://127.0.0.1:15721"
+replacement:
+  strategy: "simulate"
+  simulate_zh:
+    dictionary:
+      zh_person_name:
+        "张三": "王五"
+        "李四": "王五"
+`)
+	_, err := Load(p)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "restore would break")
+}
+
+// TestSimulatableTypes 面板下拉用的类型清单：非空、无重复、与校验集合一致、返回副本。
+func TestSimulatableTypes(t *testing.T) {
+	got := SimulatableTypes()
+	require.NotEmpty(t, got)
+	seen := map[string]bool{}
+	for _, tp := range got {
+		require.False(t, seen[tp], "重复类型 %s", tp)
+		seen[tp] = true
+		require.True(t, simulatableSet[tp], "%s 应在校验集合内", tp)
+		require.NoError(t, ValidateSimulateDictionary(map[string]map[string]string{
+			tp: {"真实值X": "假值Y"},
+		}), "%s 应可通过校验", tp)
+	}
+	require.Len(t, seen, len(simulatableSet), "Types() 与校验集合必须一一对应")
+
+	got[0] = "mutated"
+	require.NotEqual(t, "mutated", SimulatableTypes()[0], "返回的必须是副本")
 }

@@ -117,6 +117,7 @@ func main() {
 			Phone:      cfg.Replacement.SimulateZH.Phone,
 			IDCard:     cfg.Replacement.SimulateZH.IDCard,
 			BankCard:   cfg.Replacement.SimulateZH.BankCard,
+			Dictionary: cfg.Replacement.SimulateZH.Dictionary,
 		},
 		SessionKey: sessionKey,
 		Policy:     pol,

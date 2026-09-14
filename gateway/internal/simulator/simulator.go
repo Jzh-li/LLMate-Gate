@@ -16,6 +16,7 @@ import (
 	mrand "math/rand"
 	"strconv"
 	"strings"
+	"sync"
 
 	"gateway/pkg/cn"
 	"gateway/pkg/types"
@@ -30,6 +31,11 @@ type SimulateZHConfig struct {
 	Phone      bool
 	IDCard     bool
 	BankCard   bool
+	// Dictionary 用户自定义词典：entity_type → (真实值 → 仿真值)。
+	// 命中者直接返回自定义仿真值，未命中回落内置词表 + HMAC 派生。
+	// 由 config 层保证仿真值全局唯一（还原表是平表，跨类型撞车同样会串，
+	// 见 config.ValidateSimulateDictionary）。
+	Dictionary map[string]map[string]string
 }
 
 // Simulator 仿真接口（契约 §6.4）。
@@ -43,6 +49,8 @@ type Generator struct {
 	sessionKey []byte
 	// Cfg 控制哪些中文实体启用仿真。
 	Cfg SimulateZHConfig
+	// mu 保护 Cfg.Dictionary 的热加载：面板 PUT 与在途请求会并发读写。
+	mu sync.RWMutex
 }
 
 // New 构造生成器；sessionKey 为空时随机生成 32 字节。
@@ -56,10 +64,56 @@ func New(sessionKey []byte) *Generator {
 	}}
 }
 
+// SetDictionary 热加载用户自定义词典（线程安全）。传 nil 等效清空。
+//
+// 词典整体替换而非增量合并——调用方（面板 / config）持有完整视图，
+// 增量合并会让「删掉一条」无法表达。
+func (g *Generator) SetDictionary(d map[string]map[string]string) {
+	g.mu.Lock()
+	g.Cfg.Dictionary = cloneDict(d)
+	g.mu.Unlock()
+}
+
+// Dictionary 返回当前词典的深拷贝（线程安全），调用方可放心改。
+func (g *Generator) Dictionary() map[string]map[string]string {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return cloneDict(g.Cfg.Dictionary)
+}
+
+// dictLookup 在锁内查词典。
+func (g *Generator) dictLookup(entityType, value string) (string, bool) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	fake, ok := g.Cfg.Dictionary[entityType][value]
+	return fake, ok
+}
+
+// cloneDict 深拷贝两层 map；nil 进 nil 出。
+func cloneDict(d map[string]map[string]string) map[string]map[string]string {
+	if d == nil {
+		return nil
+	}
+	out := make(map[string]map[string]string, len(d))
+	for t, pairs := range d {
+		cp := make(map[string]string, len(pairs))
+		for k, v := range pairs {
+			cp[k] = v
+		}
+		out[t] = cp
+	}
+	return out
+}
+
 // Fake 生成仿真值（契约 §6.4）。
 func (g *Generator) Fake(entityType string, value []byte, sessionKey []byte) ([]byte, error) {
 	if types.IsIrreversible(entityType) {
 		return nil, ErrNoSimulation
+	}
+	// 用户自定义词典优先：命中即返回，未命中回落内置词表。
+	// 放在不可逆判定之后——词典不得把 api_key 之类的实体变成可还原值。
+	if fake, ok := g.dictLookup(entityType, string(value)); ok {
+		return []byte(fake), nil
 	}
 	key := sessionKey
 	if len(key) == 0 {

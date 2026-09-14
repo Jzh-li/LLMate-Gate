@@ -165,3 +165,95 @@ func TestSimulator_Interface(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, string(out), 11)
 }
+
+// ---------- 用户自定义词典 ----------
+//
+// 词典里的仿真值刻意用「假名A」这类不可能出现在内置词表里的字串，
+// 这样 NotEqual / NotContains 断言不会因内置词表恰好生成同值而偶发失败。
+
+// TestDictionary_Hit 词典命中的实体直接返回用户指定的仿真值。
+func TestDictionary_Hit(t *testing.T) {
+	g := newGen()
+	g.SetDictionary(map[string]map[string]string{
+		types.EntityPersonName: {"张三": "假名A"},
+	})
+	out, err := g.Fake(types.EntityPersonName, []byte("张三"), nil)
+	require.NoError(t, err)
+	require.Equal(t, "假名A", string(out))
+}
+
+// TestDictionary_MissFallsBack 未命中的值回落内置词表 + HMAC 派生，且回落路径同样确定性。
+func TestDictionary_MissFallsBack(t *testing.T) {
+	g := newGen()
+	g.SetDictionary(map[string]map[string]string{
+		types.EntityPersonName: {"张三": "假名A"},
+	})
+	a, err := g.Fake(types.EntityPersonName, []byte("李四"), nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, a)
+	require.NotEqual(t, "假名A", string(a))
+
+	b, err := g.Fake(types.EntityPersonName, []byte("李四"), nil)
+	require.NoError(t, err)
+	require.Equal(t, string(a), string(b), "回落路径也必须确定性")
+}
+
+// TestDictionary_DoesNotOverrideIrreversible 词典不能把不可逆实体变成可还原值。
+func TestDictionary_DoesNotOverrideIrreversible(t *testing.T) {
+	g := newGen()
+	g.SetDictionary(map[string]map[string]string{
+		types.EntityAPIKey: {"sk-real-secret": "sk-fake-secret"},
+	})
+	_, err := g.Fake(types.EntityAPIKey, []byte("sk-real-secret"), nil)
+	require.ErrorIs(t, err, ErrNoSimulation)
+}
+
+// TestDictionary_HotReloadAndIsolation SetDictionary 即时生效；Dictionary() 返回深拷贝。
+func TestDictionary_HotReloadAndIsolation(t *testing.T) {
+	g := newGen()
+	g.SetDictionary(map[string]map[string]string{
+		types.EntityPersonName: {"张三": "假名A"},
+	})
+
+	// 改外部快照不得影响生成器
+	snap := g.Dictionary()
+	snap[types.EntityPersonName]["张三"] = "假名B"
+	got, err := g.Fake(types.EntityPersonName, []byte("张三"), nil)
+	require.NoError(t, err)
+	require.Equal(t, "假名A", string(got))
+
+	// 整体替换后旧条目立即失效
+	g.SetDictionary(map[string]map[string]string{
+		types.EntityPersonName: {"张三": "假名C"},
+	})
+	got, err = g.Fake(types.EntityPersonName, []byte("张三"), nil)
+	require.NoError(t, err)
+	require.Equal(t, "假名C", string(got))
+
+	// 清空 → 回落内置，不再等于任何自定义值
+	g.SetDictionary(nil)
+	got, err = g.Fake(types.EntityPersonName, []byte("张三"), nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, got)
+	require.NotContains(t, []string{"假名A", "假名C"}, string(got))
+}
+
+// TestDictionary_ConcurrentReload 热加载与在途请求并发（配合 go test -race）。
+func TestDictionary_ConcurrentReload(t *testing.T) {
+	g := newGen()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			g.SetDictionary(map[string]map[string]string{
+				types.EntityPersonName: {"张三": "假名A"},
+			})
+			_ = g.Dictionary()
+		}
+	}()
+	for i := 0; i < 200; i++ {
+		_, err := g.Fake(types.EntityPersonName, []byte("李四"), nil)
+		require.NoError(t, err)
+	}
+	<-done
+}

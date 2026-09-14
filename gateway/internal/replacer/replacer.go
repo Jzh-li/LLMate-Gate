@@ -23,6 +23,10 @@ type Replacer interface {
 	Strategy() string
 	// SetStrategy 热加载替换策略（线程安全）。
 	SetStrategy(string) error
+	// SetDictionary 热加载仿真词典（线程安全）；nil 等效清空。
+	SetDictionary(map[string]map[string]string)
+	// Dictionary 返回当前仿真词典的深拷贝。
+	Dictionary() map[string]map[string]string
 	// NewSession 构造一次请求内的替换会话：跨多个字段 / 消息共享占位符计数与
 	// (type,value) 复用，保证全局占位符唯一、跨段指代不崩（契约 §5.2 规则 1-3）。
 	NewSession() *Session
@@ -99,6 +103,12 @@ func (r *impl) SetStrategy(s string) error {
 	r.mu.Unlock()
 	return nil
 }
+
+// SetDictionary 热加载仿真词典；会话与生成器共享同一个 Generator，故一次设置全局生效。
+func (r *impl) SetDictionary(d map[string]map[string]string) { r.sim.SetDictionary(d) }
+
+// Dictionary 返回当前仿真词典的深拷贝。
+func (r *impl) Dictionary() map[string]map[string]string { return r.sim.Dictionary() }
 
 // Replace 对单段文本做脱敏（契约 §5.1/§5.2）。
 //

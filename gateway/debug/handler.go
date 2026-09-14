@@ -70,6 +70,8 @@ func NewHandler(cfg *config.Config, det detector.Client, repl replacer.Replacer,
 //   POST   /_api/replace   → Playground: 检测 + 替换
 //   GET    /_api/rules     → 当前规则
 //   PUT    /_api/rules     → 更新策略（热加载）
+//   GET    /_api/dictionary → 仿真词典
+//   PUT    /_api/dictionary → 整体替换仿真词典（热加载）
 func (h *Handler) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/_debug", h.serveIndex)
 	mux.HandleFunc("/_debug/", h.serveAsset)
@@ -78,6 +80,7 @@ func (h *Handler) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/_api/detect", h.handleDetect)
 	mux.HandleFunc("/_api/replace", h.handleReplace)
 	mux.HandleFunc("/_api/rules", h.handleRules)
+	mux.HandleFunc("/_api/dictionary", h.handleDictionary)
 	mux.HandleFunc("/_api/audit", h.handleAudit)
 }
 
@@ -371,6 +374,61 @@ func (h *Handler) handleRules(w http.ResponseWriter, r *http.Request) {
 		}
 		// 广播 rule.changed（UI设计 §3 / §4.2）
 		h.hub.Publish(string(EventRuleChanged), map[string]string{"strategy": req.Strategy})
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	default:
+		w.Header().Set("Allow", "GET, PUT")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// dictResp GET /_api/dictionary 出参。
+type dictResp struct {
+	Dictionary map[string]map[string]string `json:"dictionary"`
+	// Types 可仿真的实体类型，供面板下拉渲染（顺序固定）。
+	Types []string `json:"types"`
+}
+
+// dictReq PUT /_api/dictionary 入参。
+type dictReq struct {
+	Dictionary map[string]map[string]string `json:"dictionary"`
+}
+
+// handleDictionary GET 读取仿真词典；PUT 整体替换（热加载，无需重启）。
+//
+// 整体替换而非增量合并：面板持有完整视图，「删掉一条」只有整体写回才能表达。
+// 校验复用 config.ValidateSimulateDictionary，与配置加载期同一套规则——
+// 面板绕不过「同类型仿真值必须唯一」这条，否则还原表会静默冲突。
+func (h *Handler) handleDictionary(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		dict := map[string]map[string]string{}
+		if h.repl != nil {
+			if d := h.repl.Dictionary(); d != nil {
+				dict = d
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf)
+		enc.SetEscapeHTML(false)
+		_ = enc.Encode(dictResp{Dictionary: dict, Types: config.SimulatableTypes()})
+		_, _ = w.Write(buf.Bytes())
+	case http.MethodPut:
+		var req dictReq
+		if err := decodeJSON(r, &req); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		if err := config.ValidateSimulateDictionary(req.Dictionary); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid_dictionary", err.Error())
+			return
+		}
+		if h.repl == nil {
+			writeErr(w, http.StatusNotImplemented, "not_implemented", "replacer not wired")
+			return
+		}
+		h.repl.SetDictionary(req.Dictionary)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	default:

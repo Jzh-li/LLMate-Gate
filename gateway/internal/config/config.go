@@ -11,6 +11,7 @@ import (
 	"time"
 
 	gatewayerrors "gateway/internal/errors"
+	"gateway/pkg/types"
 
 	"gopkg.in/yaml.v3"
 )
@@ -98,6 +99,9 @@ type SimulateZHConfig struct {
 	Phone      bool `yaml:"phone"`
 	IDCard     bool `yaml:"id_card"`
 	BankCard   bool `yaml:"bank_card"`
+	// Dictionary 用户自定义词典：entity_type → (真实值 → 仿真值)。
+	// 命中者用你的仿真值，未命中回落内置词表 + HMAC 派生。
+	Dictionary map[string]map[string]string `yaml:"dictionary"`
 }
 
 // PolicyConfig 安全策略。
@@ -285,8 +289,73 @@ func (c *Config) Validate() error {
 			return gatewayerrors.Errorf(gatewayerrors.CodeInvalidConfig, "replacement.per_type_fate[%s] invalid fate %q (want reversible|mask|redact)", t, f)
 		}
 	}
+	if err := ValidateSimulateDictionary(c.Replacement.SimulateZH.Dictionary); err != nil {
+		return err
+	}
 	if c.Detection.Cache.MaxEntries <= 0 {
 		c.Detection.Cache.MaxEntries = 10000
+	}
+	return nil
+}
+
+// simulatableTypeOrder 支持仿真替换的实体类型，顺序固定（供面板下拉与文档直接使用），
+// 与 simulator.Generator.Fake 的 switch 保持一致。
+var simulatableTypeOrder = []string{
+	types.EntityPersonName,
+	types.EntityPhone,
+	types.EntityIDCard,
+	types.EntityBankCard,
+	types.EntityAddress,
+	types.EntityEmail,
+	types.EntityIPAddress,
+	types.EntityDate,
+}
+
+var simulatableSet = func() map[string]bool {
+	m := make(map[string]bool, len(simulatableTypeOrder))
+	for _, t := range simulatableTypeOrder {
+		m[t] = true
+	}
+	return m
+}()
+
+// SimulatableTypes 返回可仿真的实体类型副本。
+func SimulatableTypes() []string {
+	out := make([]string, len(simulatableTypeOrder))
+	copy(out, simulatableTypeOrder)
+	return out
+}
+
+// ValidateSimulateDictionary 校验仿真词典（配置加载期与面板热加载共用同一套规则）。
+//
+// 最要紧的一条是「仿真值全局唯一」——注意是全局，不是同类型内。仿真值就是上游可见串，
+// 而响应侧还原表是 `map[哨兵串]原值` 一张平表（见 replacer.EntryPairs），不分类型分桶。
+// 所以两个真实值（哪怕类型不同）共用一个仿真值，就会在还原表里同键互相覆盖，
+// 其中一个永久还原不回来、还被错认成另一个——静默损坏，必须在入口拦下。
+func ValidateSimulateDictionary(dict map[string]map[string]string) error {
+	seen := make(map[string]string) // 仿真值 → "类型/真实值"
+	for entityType, pairs := range dict {
+		if !simulatableSet[entityType] {
+			return gatewayerrors.Errorf(gatewayerrors.CodeInvalidConfig,
+				"replacement.simulate_zh.dictionary: unknown or non-simulatable entity type %q", entityType)
+		}
+		for real, fake := range pairs {
+			if strings.TrimSpace(real) == "" {
+				return gatewayerrors.Errorf(gatewayerrors.CodeInvalidConfig,
+					"replacement.simulate_zh.dictionary[%s]: empty real value", entityType)
+			}
+			if strings.TrimSpace(fake) == "" {
+				return gatewayerrors.Errorf(gatewayerrors.CodeInvalidConfig,
+					"replacement.simulate_zh.dictionary[%s][%s]: empty fake value", entityType, real)
+			}
+			where := entityType + "/" + real
+			if prev, dup := seen[fake]; dup {
+				return gatewayerrors.Errorf(gatewayerrors.CodeInvalidConfig,
+					"replacement.simulate_zh.dictionary: fake value %q is used by both %s and %s (restore would break)",
+					fake, prev, where)
+			}
+			seen[fake] = where
+		}
 	}
 	return nil
 }

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -248,4 +249,69 @@ func TestExampleConfig_Loads(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, ":8400", c.Gateway.Listen)
 	require.Equal(t, "placeholder", c.Replacement.Strategy)
+}
+
+// ---------- 登记表 ----------
+
+// TestRegistryConfig 登记表配置只有开关 + 路径，值留在独立文件里。
+func TestRegistryConfig(t *testing.T) {
+	t.Run("加载", func(t *testing.T) {
+		p := writeConfig(t, `
+gateway:
+  listen: ":8400"
+  upstream: "http://127.0.0.1:15721"
+detection:
+  registry:
+    enabled: true
+    path: "./registry.yaml"
+`)
+		c, err := Load(p)
+		require.NoError(t, err)
+		require.True(t, c.Detection.Registry.Enabled)
+		require.Equal(t, "./registry.yaml", c.Detection.Registry.Path)
+	})
+	t.Run("启用但没给路径", func(t *testing.T) {
+		// 面板里加的值若不落盘，重启就静默消失，而用户以为已经登记好了
+		p := writeConfig(t, `
+gateway:
+  listen: ":8400"
+  upstream: "http://127.0.0.1:15721"
+detection:
+  registry:
+    enabled: true
+`)
+		_, err := Load(p)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "detection.registry.path is required")
+	})
+	t.Run("默认关闭且不要求路径", func(t *testing.T) {
+		c, err := Load("")
+		require.NoError(t, err)
+		require.False(t, c.Detection.Registry.Enabled)
+		require.Empty(t, c.Detection.Registry.Path)
+	})
+	t.Run("路径支持环境变量展开", func(t *testing.T) {
+		t.Setenv("LMGATE_TEST_REGISTRY_PATH", "/tmp/lmgate-registry.yaml")
+		p := writeConfig(t, `
+gateway:
+  listen: ":8400"
+  upstream: "http://127.0.0.1:15721"
+detection:
+  registry:
+    enabled: true
+    path: "${LMGATE_TEST_REGISTRY_PATH}"
+`)
+		c, err := Load(p)
+		require.NoError(t, err)
+		require.Equal(t, "/tmp/lmgate-registry.yaml", c.Detection.Registry.Path)
+	})
+	t.Run("结构上不许放登记值", func(t *testing.T) {
+		// 登记值是明文 PII，一旦进了 config 就会顺着配置摘要进日志、顺着
+		// /metrics 与面板配置视图扩散出去。这条测试把这个不变量钉住：以后真要
+		// 往这里加字段，必须先想清楚「它会不会带用户 PII」。
+		typ := reflect.TypeOf(RegistryConfig{})
+		require.Equal(t, 2, typ.NumField(), "RegistryConfig 只该有 开关 + 路径")
+		require.Equal(t, "Enabled", typ.Field(0).Name)
+		require.Equal(t, "Path", typ.Field(1).Name)
+	})
 }

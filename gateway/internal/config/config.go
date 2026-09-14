@@ -61,8 +61,19 @@ type DetectionConfig struct {
 	Sidecar    SidecarConfig      `yaml:"sidecar"`
 	Thresholds map[string]float64 `yaml:"thresholds"`
 	Cache      CacheConfig        `yaml:"cache"`
+	Registry   RegistryConfig     `yaml:"registry"`
 	// FallbackRegex 为格式固定的实体提供正则加速通道（不经过模型）。
 	FallbackRegex bool `yaml:"fallback_regex"`
+}
+
+// RegistryConfig 登记表配置（用户自报真实 PII 值的检测补召回层）。
+//
+// 这里只有「开关 + 文件路径」——登记值本身留在独立文件里。这样配置摘要、
+// 审计事件、面板的配置视图统统碰不到明文 PII，只有加载登记表的那一处读文件。
+// 文件是明文，权限收在 0600（见 registry.SaveFile）。
+type RegistryConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Path    string `yaml:"path"`
 }
 
 // SidecarConfig PII Engineer sidecar 进程管理配置。
@@ -215,6 +226,7 @@ func expandEnvDeep(c *Config) {
 	c.Audit.Path = expandEnv(c.Audit.Path)
 	c.Detection.Sidecar.Endpoint = expandEnv(c.Detection.Sidecar.Endpoint)
 	c.Detection.Sidecar.Command = expandEnv(c.Detection.Sidecar.Command)
+	c.Detection.Registry.Path = expandEnv(c.Detection.Registry.Path)
 }
 
 // Load 从 YAML 文件加载配置；path 为空时返回默认配置。
@@ -270,6 +282,11 @@ func (c *Config) Validate() error {
 	}
 	if c.Detection.Cache.TTL > 0 && c.Detection.Cache.TTL < time.Minute {
 		return gatewayerrors.New(gatewayerrors.CodeInvalidConfig, "detection.cache.ttl must be >= 1m")
+	}
+	// 登记表必须有落盘位置：面板里加的值若不落盘，重启就静默消失，
+	// 而用户会以为已经登记好了。
+	if c.Detection.Registry.Enabled && strings.TrimSpace(c.Detection.Registry.Path) == "" {
+		return gatewayerrors.New(gatewayerrors.CodeInvalidConfig, "detection.registry.path is required when detection.registry.enabled is true")
 	}
 	if c.Vault.RequestTTL < 5*time.Minute {
 		return gatewayerrors.New(gatewayerrors.CodeInvalidConfig, "vault.request_ttl must be >= 5m")

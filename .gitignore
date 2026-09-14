@@ -28,6 +28,11 @@ __pycache__/
 # 敏感 fixture（仅本地使用）
 **/testdata/private/
 
+# 登记表（detection.registry.path）：里面是明文真实 PII，任何位置都别入库。
+# 不带斜杠的模式在任意层级都匹配，所以一行够用。
+registry.yaml
+registry.yml
+
 # 本地冒烟测试配置（单人本机验证用，不进版本库）
 gateway/configs/smoke.yaml
 

@@ -52,6 +52,19 @@ detection:
     bind_conversation: true              # 缓存键强制绑定 conversation_id
     ttl: "30m"
     max_entries: 10000
+  # 登记表：把你自己的真实 PII 值报给网关，出现即脱敏。
+  #
+  # 中文姓名、自定义地址这类值没有格式约束，统计模型给不出召回保证；登记表是
+  # 精确匹配的兜底，命中即脱敏，且不受 thresholds 限制。
+  # 与仿真词典的分工：登记表决定「能不能认出来」，词典决定「换成什么假值」。
+  #
+  # ⚠️ 值本身不写在这里，只在 path 指向的文件里——那是明文 PII，权限 0600，
+  #    不要提交进版本库、不要放共享目录。
+  #
+  # 也可以直接在调试面板「规则」页维护（保存即落盘 + 热加载，无需重启）。
+  # registry:
+  #   enabled: true
+  #   path: "./registry.yaml"
 
 replacement:
   # placeholder : <<zh_person_name_1>> 式占位符

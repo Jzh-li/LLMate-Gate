@@ -27,14 +27,31 @@ type Config struct {
 
 // GatewayConfig 网关监听与上游配置。
 type GatewayConfig struct {
-	Listen         string        `yaml:"listen"`
-	Upstream       string        `yaml:"upstream"`
-	AuthToken      string        `yaml:"auth_token"`
-	UpstreamAPIKey string        `yaml:"upstream_api_key"`
-	RequestTimeout time.Duration `yaml:"request_timeout"`
-	Debug          bool          `yaml:"debug"`
-	DebugBind      string        `yaml:"debug_bind"`
-	LogLevel       string        `yaml:"log_level"`
+	Listen         string           `yaml:"listen"`
+	Upstream       string           `yaml:"upstream"`
+	AuthToken      string           `yaml:"auth_token"`
+	UpstreamAPIKey string           `yaml:"upstream_api_key"`
+	Upstreams      []UpstreamConfig `yaml:"upstreams"`
+	RequestTimeout time.Duration    `yaml:"request_timeout"`
+	Debug          bool             `yaml:"debug"`
+	DebugBind      string           `yaml:"debug_bind"`
+	LogLevel       string           `yaml:"log_level"`
+}
+
+// UpstreamConfig 按协议路由的上游（各家厂商适配，配置驱动而非写死代码）。
+//
+// 网关入口同时支持 OpenAI 兼容（/v1/chat/completions 等）与 Anthropic
+// 兼容（/v1/messages）两类协议；不同厂商的这两种端点地址与鉴权方式不同
+// （如 DeepSeek 的 Anthropic 端点是 https://api.deepseek.com/anthropic，
+// 用 x-api-key + anthropic-version）。通过 upstreams 列表声明各协议的目标即可。
+type UpstreamConfig struct {
+	Protocol   string `yaml:"protocol"`    // openai | anthropic
+	BaseURL    string `yaml:"base_url"`    // 该协议上游的 base URL
+	APIKey     string `yaml:"api_key"`     // 上游鉴权 key（Anthropic → x-api-key，OpenAI → Bearer）
+	APIVersion string `yaml:"api_version"` // Anthropic anthropic-version；默认 2023-06-01
+	// PathPrefix 替换入口路径里的 /v1 段。多数厂商用 /v1；智谱 GLM 是 /v4，
+	// 通义千问 DashScope 是 /compatible-mode/v1。留空则原样透传 /v1。
+	PathPrefix string `yaml:"path_prefix"`
 }
 
 // DetectionConfig 检测引擎配置。
@@ -183,6 +200,12 @@ func expandEnvDeep(c *Config) {
 	c.Gateway.Upstream = expandEnv(c.Gateway.Upstream)
 	c.Gateway.AuthToken = expandEnv(c.Gateway.AuthToken)
 	c.Gateway.UpstreamAPIKey = expandEnv(c.Gateway.UpstreamAPIKey)
+	for i := range c.Gateway.Upstreams {
+		c.Gateway.Upstreams[i].BaseURL = expandEnv(c.Gateway.Upstreams[i].BaseURL)
+		c.Gateway.Upstreams[i].APIKey = expandEnv(c.Gateway.Upstreams[i].APIKey)
+		c.Gateway.Upstreams[i].APIVersion = expandEnv(c.Gateway.Upstreams[i].APIVersion)
+		c.Gateway.Upstreams[i].PathPrefix = expandEnv(c.Gateway.Upstreams[i].PathPrefix)
+	}
 	c.Gateway.DebugBind = expandEnv(c.Gateway.DebugBind)
 	c.Vault.Path = expandEnv(c.Vault.Path)
 	c.Audit.Path = expandEnv(c.Audit.Path)
@@ -217,6 +240,16 @@ func (c *Config) Validate() error {
 	}
 	if !strings.HasPrefix(c.Gateway.Listen, ":") {
 		return gatewayerrors.New(gatewayerrors.CodeInvalidConfig, "gateway.listen must start with ':' (e.g. :8400)")
+	}
+	for _, u := range c.Gateway.Upstreams {
+		switch u.Protocol {
+		case "openai", "anthropic":
+		default:
+			return gatewayerrors.Errorf(gatewayerrors.CodeInvalidConfig, "unknown upstreams[].protocol: %q", u.Protocol)
+		}
+		if strings.TrimSpace(u.BaseURL) == "" {
+			return gatewayerrors.New(gatewayerrors.CodeInvalidConfig, "upstreams[].base_url is required")
+		}
 	}
 	if c.Gateway.RequestTimeout <= 0 {
 		c.Gateway.RequestTimeout = 30 * time.Second

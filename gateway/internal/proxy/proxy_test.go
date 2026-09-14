@@ -115,7 +115,7 @@ func newTestProxy(t *testing.T) *testProxy {
 		enc.SetEscapeHTML(false) // 模拟真实 LLM：占位符以字面量返回，不被 HTML 转义
 		_ = enc.Encode(resp)
 	}))
-	tp.px = New(proc, mustParse(t, up.URL), "", "", nil, false, nil)
+	tp.px = New(proc, &Upstream{URL: mustParse(t, up.URL)}, nil, nil, false, nil)
 	tp.closeUp = up.Close
 	t.Cleanup(up.Close)
 	return tp
@@ -229,6 +229,136 @@ func TestProxy_Embeddings_Anonymize(t *testing.T) {
 	require.NotContains(t, up, "张三", "上游不得看到明文")
 }
 
+// TestProxy_ProtocolRouting 验证配置驱动的协议路由：
+//   - /v1/chat/completions（OpenAI）→ openai 上游，Authorization: Bearer
+//   - /v1/messages（Anthropic）→ anthropic 上游，x-api-key + anthropic-version
+func TestProxy_ProtocolRouting(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		hitHost string
+		gotPath string
+		gotAuth string
+		gotVer  string
+	)
+	openaiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hitHost, gotPath, gotAuth = "openai", r.URL.Path, r.Header.Get("Authorization")
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
+	}))
+	t.Cleanup(openaiSrv.Close)
+	anthropicSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hitHost, gotPath, gotAuth, gotVer = "anthropic", r.URL.Path, r.Header.Get("x-api-key"), r.Header.Get("anthropic-version")
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg_1","type":"message","content":[{"type":"text","text":"ok"}]}`))
+	}))
+	t.Cleanup(anthropicSrv.Close)
+
+	v, err := vault.NewMemVault(testTTL, []byte("unit-test-passphrase"), false, "")
+	require.NoError(t, err)
+	det := detector.NewRegexEngine(detector.WithThresholds(map[string]float64{
+		"zh_person_name": 0.5, "zh_phone": 0.8,
+	}))
+	repl := replacer.New(replacer.Config{
+		Strategy: "placeholder", Irreversible: []string{"api_key", "password", "token"},
+		Simulate: simulator.SimulateZHConfig{}, SessionKey: []byte("session-key-32-bytes-long!!!"),
+	}, v)
+	proc := pipeline.New(pipeline.Config{Detector: det, Replacer: repl, Vault: v, FailClosed: true})
+
+	px := New(proc,
+		&Upstream{URL: mustParse(t, openaiSrv.URL), APIKey: "sk-openai"},
+		&Upstream{URL: mustParse(t, anthropicSrv.URL), APIKey: "sk-anthropic", APIVersion: "2023-06-01"},
+		nil, false, nil)
+
+	// OpenAI 路径
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"messages":[{"role":"user","content":"hi"}]}`))
+	rec := httptest.NewRecorder()
+	px.Handle(rec, req, "chat.completions", false)
+	require.Equal(t, 200, rec.Code)
+	mu.Lock()
+	h, p, a := hitHost, gotPath, gotAuth
+	mu.Unlock()
+	require.Equal(t, "openai", h)
+	require.Equal(t, "/v1/chat/completions", p)
+	require.Equal(t, "Bearer sk-openai", a)
+
+	// Anthropic 路径
+	req2 := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"deepseek-chat","messages":[{"role":"user","content":"hi"}]}`))
+	rec2 := httptest.NewRecorder()
+	px.Handle(rec2, req2, "messages", false)
+	require.Equal(t, 200, rec2.Code)
+	mu.Lock()
+	h, p, a, ver := hitHost, gotPath, gotAuth, gotVer
+	mu.Unlock()
+	require.Equal(t, "anthropic", h)
+	require.Equal(t, "/v1/messages", p)
+	require.Equal(t, "sk-anthropic", a)
+	require.Equal(t, "2023-06-01", ver)
+}
+
+// TestProxy_PathPrefix 验证 path_prefix 替换入口 /v1 段（国内厂商差异：智谱 /v4、DashScope /compatible-mode/v1）。
+func TestProxy_PathPrefix(t *testing.T) {
+	px := New(nil,
+		&Upstream{URL: mustParse(t, "https://open.bigmodel.cn/api/paas"), PathPrefix: "/v4"},
+		nil, nil, false, nil)
+	require.Equal(t, "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+		px.upstreamFor("chat.completions", "/v1/chat/completions"))
+
+	// 无 path_prefix 时原样透传 /v1（OpenAI / DeepSeek / Moonshot 等主流）
+	px2 := New(nil, &Upstream{URL: mustParse(t, "https://api.openai.com")}, nil, nil, false, nil)
+	require.Equal(t, "https://api.openai.com/v1/chat/completions",
+		px2.upstreamFor("chat.completions", "/v1/chat/completions"))
+}
+
+// TestProxy_TransparentAuth 上游没配 key 时（透传模式），客户端鉴权头必须原样保留，
+// 供 gate 前置拓扑下下一跳（如 ccswitch）继续鉴权，gate 不持凭据、不删不改。
+func TestProxy_TransparentAuth(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		gotKey  string
+		gotAuth string
+	)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		gotKey = r.Header.Get("x-api-key")
+		gotAuth = r.Header.Get("Authorization")
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg_1","type":"message","content":[{"type":"text","text":"ok"}]}`))
+	}))
+	t.Cleanup(up.Close)
+
+	v, err := vault.NewMemVault(testTTL, []byte("unit-test-passphrase"), false, "")
+	require.NoError(t, err)
+	det := detector.NewRegexEngine(detector.WithThresholds(map[string]float64{
+		"zh_person_name": 0.5, "zh_phone": 0.8,
+	}))
+	repl := replacer.New(replacer.Config{
+		Strategy: "placeholder", Irreversible: []string{"api_key", "password", "token"},
+		Simulate: simulator.SimulateZHConfig{}, SessionKey: []byte("session-key-32-bytes-long!!!"),
+	}, v)
+	proc := pipeline.New(pipeline.Config{Detector: det, Replacer: repl, Vault: v, FailClosed: true})
+
+	// 注意：openai 上游不配 APIKey → 透传模式
+	px := New(proc, &Upstream{URL: mustParse(t, up.URL)}, nil, nil, false, nil)
+
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"deepseek-chat","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("x-api-key", "sk-client-token")
+	req.Header.Set("anthropic-version", "2023-06-01")
+	rec := httptest.NewRecorder()
+	px.Handle(rec, req, "messages", false)
+
+	require.Equal(t, 200, rec.Code)
+	mu.Lock()
+	k, a := gotKey, gotAuth
+	mu.Unlock()
+	require.Equal(t, "sk-client-token", k, "透传模式必须保留客户端 x-api-key")
+	require.Empty(t, a, "透传模式不应凭空添加 Authorization")
+}
+
 // failDetector 永远返回错误的检测器，用于验证 fail-closed 阻断。
 type failDetector struct{}
 
@@ -252,7 +382,7 @@ func TestProxy_FailClosed_Blocks(t *testing.T) {
 	proc := pipeline.New(pipeline.Config{
 		Detector: failDetector{}, Replacer: repl, Vault: v, FailClosed: true,
 	})
-	px := New(proc, mustParse(t, "http://127.0.0.1:1"), "", "", nil, false, nil)
+	px := New(proc, &Upstream{URL: mustParse(t, "http://127.0.0.1:1")}, nil, nil, false, nil)
 
 	body := `{"messages":[{"role":"user","content":"我叫张三"}]}`
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
@@ -395,7 +525,7 @@ func newIncrementalProxy(t *testing.T) (*Proxy, *cache.MerkleCache, *countingDet
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
 	}))
 	t.Cleanup(up.Close)
-	px := New(proc, mustParse(t, up.URL), "", "", nil, false, mk)
+	px := New(proc, &Upstream{URL: mustParse(t, up.URL)}, nil, nil, false, mk)
 	return px, mk, det, func() string {
 		mu.Lock()
 		defer mu.Unlock()
@@ -506,7 +636,7 @@ func newTestProxyWithMetrics(t *testing.T) (*testProxy, *metrics.Collectors, *pr
 			},
 		})
 	}))
-	tp.px = New(proc, mustParse(t, up.URL), "", "", m, false, nil)
+	tp.px = New(proc, &Upstream{URL: mustParse(t, up.URL)}, nil, m, false, nil)
 	tp.closeUp = up.Close
 	t.Cleanup(up.Close)
 	return tp, m, reg

@@ -194,12 +194,30 @@ func main() {
 		FailClosed: cfg.Policy.FailClosed,
 	})
 
-	// 代理。
+	// 代理：默认 OpenAI 上游 + 可选的协议路由上游（config 驱动各家厂商适配）。
 	up, err := url.Parse(cfg.Gateway.Upstream)
 	if err != nil {
 		log.Fatalf("invalid upstream url: %v", err)
 	}
-	px := proxy.New(proc, up, cfg.Gateway.UpstreamAPIKey, "2023-06-01", m, cfg.Audit.LogPII, merkle)
+	openaiUp := &proxy.Upstream{URL: up, APIKey: cfg.Gateway.UpstreamAPIKey}
+	var anthropicUp *proxy.Upstream
+	for _, u := range cfg.Gateway.Upstreams {
+		bu, err := url.Parse(u.BaseURL)
+		if err != nil {
+			log.Fatalf("invalid upstreams[].base_url (%s): %v", u.Protocol, err)
+		}
+		target := &proxy.Upstream{URL: bu, APIKey: u.APIKey, APIVersion: u.APIVersion, PathPrefix: u.PathPrefix}
+		switch u.Protocol {
+		case "openai":
+			openaiUp = target
+		case "anthropic":
+			if target.APIVersion == "" {
+				target.APIVersion = "2023-06-01"
+			}
+			anthropicUp = target
+		}
+	}
+	px := proxy.New(proc, openaiUp, anthropicUp, m, cfg.Audit.LogPII, merkle)
 
 	// 服务。
 	srv := server.New(server.Options{

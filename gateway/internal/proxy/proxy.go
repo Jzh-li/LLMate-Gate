@@ -25,29 +25,38 @@ import (
 	"gateway/pkg/types"
 )
 
-// Proxy 转发代理。
-type Proxy struct {
-	proc           *pipeline.Processor
-	upstream       *url.URL
-	upstreamAPIKey string
-	upstreamVer    string // Anthropic 需要 x-api-key + anthropic-version
-	client         *http.Client
-	m              *metrics.Collectors
-	logPII         bool
-	merkle         *cache.MerkleCache // 会话级增量检测缓存（nil 关闭）
+// Upstream 描述一个协议上游的转发目标（配置驱动，见 config.UpstreamConfig）。
+//
+// 各家厂商适配：OpenAI 兼容上游用 Authorization: Bearer，Anthropic 兼容上游
+// 用 x-api-key + anthropic-version。两者只是鉴权与 base URL 不同，转发/脱敏/还原共用一套。
+type Upstream struct {
+	URL        *url.URL
+	APIKey     string
+	APIVersion string // Anthropic anthropic-version；OpenAI 协议留空
+	PathPrefix string // 替换入口 /v1 段（如智谱 /v4、DashScope /compatible-mode/v1）；空则透传 /v1
 }
 
-// New 构造代理。
-func New(proc *pipeline.Processor, upstream *url.URL, upstreamAPIKey, upstreamVer string, m *metrics.Collectors, logPII bool, merkle *cache.MerkleCache) *Proxy {
+// Proxy 转发代理。
+type Proxy struct {
+	proc      *pipeline.Processor
+	openai    *Upstream // 默认 OpenAI 兼容上游（必填）
+	anthropic *Upstream // Anthropic 上游（可选；nil 时 /v1/messages 回退 openai）
+	client    *http.Client
+	m         *metrics.Collectors
+	logPII    bool
+	merkle    *cache.MerkleCache // 会话级增量检测缓存（nil 关闭）
+}
+
+// New 构造代理。openai 必填；anthropic 可选。
+func New(proc *pipeline.Processor, openai, anthropic *Upstream, m *metrics.Collectors, logPII bool, merkle *cache.MerkleCache) *Proxy {
 	return &Proxy{
-		proc:           proc,
-		upstream:       upstream,
-		upstreamAPIKey: upstreamAPIKey,
-		upstreamVer:    upstreamVer,
-		client:         &http.Client{Timeout: 30 * time.Second},
-		m:              m,
-		logPII:         logPII,
-		merkle:         merkle,
+		proc:      proc,
+		openai:    openai,
+		anthropic: anthropic,
+		client:    &http.Client{Timeout: 30 * time.Second},
+		m:         m,
+		logPII:    logPII,
+		merkle:    merkle,
 	}
 }
 
@@ -387,19 +396,17 @@ func (p *Proxy) anonymizeJSONString(v interface{}, anon func(string) (string, er
 
 // forward 转发上游并还原响应。
 func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, endpoint string, stream bool, reqID, convID, model string, newBody []byte, rawRequest string, entries []types.MappingEntry, start time.Time) {
-	dest := p.upstreamFor(r.URL.Path)
+	dest := p.upstreamFor(endpoint, r.URL.Path)
 	upReq, err := http.NewRequestWithContext(r.Context(), r.Method, dest, bytes.NewReader(newBody))
 	if err != nil {
 		writeError(w, gatewayerrors.Wrap(gatewayerrors.CodeUpstreamError, "build upstream request", err))
 		return
 	}
 	copyHeaders(upReq.Header, r.Header)
-	upReq.Header.Del("Authorization")
-	upReq.Header.Del("X-Api-Key")
-	p.setUpstreamAuth(upReq)
+	p.setUpstreamAuth(endpoint, upReq)
 	upReq.Header.Set("Content-Type", "application/json")
-	if p.upstreamVer != "" {
-		upReq.Header.Set("anthropic-version", p.upstreamVer)
+	if ver := p.targetFor(endpoint).APIVersion; ver != "" {
+		upReq.Header.Set("anthropic-version", ver)
 	}
 
 	resp, err := p.client.Do(upReq)
@@ -548,23 +555,46 @@ func isEventStream(contentType string) bool {
 	return strings.Contains(strings.ToLower(contentType), "text/event-stream")
 }
 
-func (p *Proxy) upstreamFor(path string) string {
-	u := *p.upstream
-	u.Path = singleJoiningSlash(u.Path, path)
+// isAnthropicEndpoint 判定 endpoint 是否走 Anthropic Messages 协议。
+func isAnthropicEndpoint(endpoint string) bool {
+	return endpoint == "messages" || strings.HasSuffix(endpoint, "/v1/messages")
+}
+
+// targetFor 按 endpoint 协议选择上游（配置驱动：openai / anthropic）。
+func (p *Proxy) targetFor(endpoint string) *Upstream {
+	if isAnthropicEndpoint(endpoint) && p.anthropic != nil {
+		return p.anthropic
+	}
+	return p.openai
+}
+
+func (p *Proxy) upstreamFor(endpoint, path string) string {
+	t := p.targetFor(endpoint)
+	u := *t.URL
+	rel := path
+	if t.PathPrefix != "" {
+		rel = t.PathPrefix + strings.TrimPrefix(path, "/v1")
+	}
+	u.Path = singleJoiningSlash(u.Path, rel)
 	u.RawQuery = "" // 不转发代理自身 query
 	return u.String()
 }
 
-func (p *Proxy) setUpstreamAuth(req *http.Request) {
-	if p.upstreamAPIKey == "" {
+func (p *Proxy) setUpstreamAuth(endpoint string, req *http.Request) {
+	t := p.targetFor(endpoint)
+	if t.APIKey == "" {
+		// 透传模式：上游没配 key 时，保留客户端原样鉴权头（gate 前置拓扑，
+		// 真实鉴权由下一跳 ccswitch 等完成，gate 只做脱敏、不持有凭据）。
 		return
 	}
-	if p.upstreamVer != "" && strings.Contains(p.upstream.Path, "/v1/messages") {
+	req.Header.Del("Authorization")
+	req.Header.Del("X-Api-Key")
+	if isAnthropicEndpoint(endpoint) {
 		// Anthropic 用 x-api-key
-		req.Header.Set("x-api-key", p.upstreamAPIKey)
+		req.Header.Set("x-api-key", t.APIKey)
 		return
 	}
-	req.Header.Set("Authorization", "Bearer "+p.upstreamAPIKey)
+	req.Header.Set("Authorization", "Bearer "+t.APIKey)
 }
 
 func (p *Proxy) strategy() string { return p.proc.Strategy() }
@@ -584,7 +614,7 @@ func (p *Proxy) recordAudit(reqID, convID, endpoint, model string, stream bool, 
 		Timestamp:        time.Now(),
 		RequestID:        reqID,
 		ConversationID:   convID,
-		Upstream:         p.upstream.Host,
+		Upstream:         p.targetFor(endpoint).URL.Host,
 		Model:            model,
 		DetectedEntities: toAuditSummary(entitiesFromEntries(entries), p.logPII),
 		ReplacedCount:    len(entries),
@@ -767,16 +797,14 @@ func randHex(n int) string {
 
 // Passthrough 透传无需脱敏的端点（如 /v1/models）。
 func (p *Proxy) Passthrough(w http.ResponseWriter, r *http.Request) {
-	dest := p.upstreamFor(r.URL.Path)
+	dest := p.upstreamFor("", r.URL.Path)
 	upReq, err := http.NewRequestWithContext(r.Context(), r.Method, dest, nil)
 	if err != nil {
 		writeError(w, gatewayerrors.Wrap(gatewayerrors.CodeUpstreamError, "build passthrough", err))
 		return
 	}
 	copyHeaders(upReq.Header, r.Header)
-	upReq.Header.Del("Authorization")
-	upReq.Header.Del("X-Api-Key")
-	p.setUpstreamAuth(upReq)
+	p.setUpstreamAuth("", upReq)
 	resp, err := p.client.Do(upReq)
 	if err != nil {
 		writeError(w, gatewayerrors.Wrap(gatewayerrors.CodeUpstreamError, "upstream passthrough", err))

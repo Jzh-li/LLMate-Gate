@@ -90,6 +90,14 @@ replacement:
     #     "李四": "陈静"
     #   zh_address:
     #     "北京市朝阳区建国路 88 号": "上海市浦东新区世纪大道 100 号"
+    #
+    # 身份卡：dictionary 的糖。按类型声明「我自己的真实值」，网关用固定密钥生成
+    # 格式保持、跨重启稳定的仿真值，展开进 dictionary（手写词典优先）。每种类型一个。
+    # 不想自己起仿真名、又想让仿真身份稳定可预期时用它。
+    # identity_card:
+    #   zh_person_name: "张三"
+    #   zh_phone: "13800138000"
+    #   zh_address: "北京市朝阳区建国路 88 号"
   irreversible:
     - api_key
     - password

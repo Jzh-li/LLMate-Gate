@@ -5,6 +5,8 @@
 //   - /_api/detect   POST Playground 检测
 //   - /_api/replace  POST Playground 检测+替换
 //   - /_api/rules    GET/PUT 规则读取/热加载
+//   - /_api/dictionary GET/PUT 仿真词典（运行时）
+//   - /_api/registry GET/PUT 登记表（明文 PII，PUT 同时落盘）
 //   - /ws/events     WebSocket 实时事件流
 
 (function () {
@@ -445,6 +447,151 @@
     pre.scrollIntoView({ behavior: "smooth", block: "nearest" });
   });
 
+  // ----- 规则：登记表（用户自报真实 PII 值，检测层补召回） -----
+  let regTypes = [];    // 可登记的实体类型（服务端给出）
+  let regRows = [];     // 编辑中的行：[{type, value}]
+  let regEnabled = false;
+
+  // 只折 ASCII A-Z，与 Go 侧 registry.foldASCII 一致。
+  // 不能用 toLowerCase()——那是 Unicode 折叠，会和服务端的判重规则分叉，
+  // 本地报重复而服务端放行（或反之）都很难解释。
+  function foldASCII(s) {
+    return s.replace(/[A-Z]/g, (c) => c.toLowerCase());
+  }
+
+  function markRegDirty() {
+    setHint($("#regStatus"), "有未保存的改动", "warn");
+  }
+
+  function setRegEnabled(on, path) {
+    regEnabled = on;
+    $("#regPath").textContent = path || "—";
+    const notice = $("#regNotice");
+    if (!on) {
+      notice.classList.add("off");
+      $("#regAdd").disabled = true;
+      $("#regSave").disabled = true;
+    } else {
+      notice.classList.remove("off");
+      $("#regAdd").disabled = false;
+      $("#regSave").disabled = false;
+    }
+  }
+
+  function renderReg() {
+    const tb = $("#regBody");
+    if (regRows.length === 0) {
+      tb.innerHTML = '<tr><td colspan="3" class="dict-empty">还没有登记项——'
+        + (regEnabled
+          ? "把模型漏检的真实值填进来，出现即脱敏。"
+          : "登记表未启用。") + "</td></tr>";
+      return;
+    }
+    tb.innerHTML = regRows.map((row, i) => {
+      const opts = regTypes.map((t) =>
+        `<option value="${escape(t)}"${t === row.type ? " selected" : ""}>${escape(t)}</option>`).join("");
+      return `<tr>
+        <td><select data-ri="${i}" data-rf="type">${opts}</select></td>
+        <td><input data-ri="${i}" data-rf="value" value="${escape(row.value)}" placeholder="真实值，如 张三" /></td>
+        <td><button type="button" class="btn tiny danger" data-rdel="${i}" title="删除这一行">✕</button></td>
+      </tr>`;
+    }).join("");
+
+    // input 只改数据、不重渲染（重渲染会丢焦点）；删除才重渲染，索引与渲染时一致。
+    $$("#regBody [data-rf]").forEach((el) => {
+      const handler = () => {
+        regRows[Number(el.dataset.ri)][el.dataset.rf] = el.value;
+        markRegDirty();
+      };
+      el.addEventListener("input", handler);
+      el.addEventListener("change", handler);
+    });
+    $$("#regBody [data-rdel]").forEach((el) => {
+      el.addEventListener("click", () => {
+        regRows.splice(Number(el.dataset.rdel), 1);
+        renderReg();
+        markRegDirty();
+      });
+    });
+  }
+
+  async function loadRegistry() {
+    try {
+      const resp = await fetch("/_api/registry");
+      const data = await resp.json();
+      regTypes = data.types || [];
+      setRegEnabled(!!data.enabled, data.path);
+      const reg = data.registry || {};
+      regRows = [];
+      Object.keys(reg).forEach((t) => {
+        (reg[t] || []).forEach((v) => regRows.push({ type: t, value: v }));
+      });
+      regRows.sort((a, b) => cmp(a.type, b.type) || cmp(a.value, b.value));
+      renderReg();
+      if (!data.enabled) {
+        setHint($("#regStatus"),
+          "未启用：配置里打开 detection.registry.enabled 并设好 detection.registry.path，重启后可用", "warn");
+      } else {
+        setHint($("#regStatus"), regRows.length === 0 ? "" : "共 " + regRows.length + " 条", "ok");
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  // 收集编辑中的行 → PUT 结构。本地先拦一遍，报错能定位到具体是哪儿的问题；
+  // 服务端规则相同（registry.Validate），且服务端消息不回显值。
+  function collectReg() {
+    const out = {};
+    const seen = {}; // 折叠值 → "类型/值"
+    for (const row of regRows) {
+      const v = (row.value || "").trim();
+      if (!v) continue; // 整行空白 → 视作没填
+      if (v !== row.value) return { error: "「" + v + "」首尾有空白，去掉再保存" };
+      if (Array.from(v).length < 2) {
+        return { error: "「" + v + "」只有 1 个字符，会把正文里每次出现都当成 PII，太短不能登记" };
+      }
+      const f = foldASCII(v);
+      if (seen[f]) {
+        return { error: "「" + v + "」同时登记在 " + seen[f].split("/")[0] + " 和 " + row.type + "，同一个值只能属于一个类型" };
+      }
+      seen[f] = row.type + "/" + v;
+      (out[row.type] = out[row.type] || []).push(v);
+    }
+    return { reg: out };
+  }
+
+  function regCount(reg) {
+    return Object.keys(reg).reduce((n, t) => n + reg[t].length, 0);
+  }
+
+  $("#regAdd").addEventListener("click", () => {
+    regRows.push({ type: regTypes[0] || "zh_person_name", value: "" });
+    renderReg();
+    markRegDirty();
+    const vals = $$("#regBody input[data-rf='value']");
+    if (vals.length) vals[vals.length - 1].focus();
+  });
+
+  $("#regSave").addEventListener("click", async () => {
+    const res = collectReg();
+    if (res.error) { setHint($("#regStatus"), res.error, "err"); return; }
+    setHint($("#regStatus"), "保存中…");
+    try {
+      const resp = await fetch("/_api/registry", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ registry: res.reg }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        setHint($("#regStatus"), "失败：" + ((err.error && err.error.message) || resp.status), "err");
+        return;
+      }
+      setHint($("#regStatus"), "已生效（" + regCount(res.reg) + " 条，已落盘）", "ok");
+      loadRegistry();
+    } catch (e) {
+      setHint($("#regStatus"), "失败：" + e.message, "err");
+    }
+  });
+
   // ----- 审计 -----
   async function auditRefresh() {
     const limit = $("#auditLimit") ? $("#auditLimit").value : 50;
@@ -503,6 +650,7 @@
   refreshTraffic();
   loadRules();
   loadDictionary();
+  loadRegistry();
   // 周期性拉取兜底（WS 断线期间不丢记录）
   setInterval(refreshTraffic, 3000);
   // 审计页自动刷新（仅当审计 Tab 激活且开启自动刷新）

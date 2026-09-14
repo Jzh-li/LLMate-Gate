@@ -26,6 +26,7 @@ import (
 	"gateway/internal/pipeline"
 	"gateway/internal/policy"
 	"gateway/internal/proxy"
+	"gateway/internal/registry"
 	"gateway/internal/replacer"
 	"gateway/internal/server"
 	"gateway/internal/simulator"
@@ -88,6 +89,13 @@ func main() {
 	default:
 		det = detector.NewRegexEngine(opts...)
 	}
+
+	// 登记表：用户自报真实 PII 值，检测层精确匹配补召回。
+	//
+	// 加载失败一律 fatal：带着「半张登记表」启动是最坏的结局——用户以为某个值
+	// 已经被保护了，其实没有。文件不存在不算错（首次运行、值都由面板录入）。
+	piiReg := loadRegistry(cfg)
+	det = registry.Wrap(det, piiReg)
 
 	// 熔断：连续失败进入半开探测，配合 fail-closed。
 	breaker := circuit.New(5, 10*time.Second, func(open bool) {
@@ -157,6 +165,21 @@ func main() {
 				}
 			}
 		}()
+	}
+
+	// 登记表一变，两层检测缓存都得清：缓存键只由文本哈希 / 段哈希构成，看不出
+	// 检测的输入侧已经变了。不清的话「刚补登一个值、重发同一句话」会命中旧结果，
+	// 而这恰恰是这个功能最主要的用法。
+	if piiReg != nil {
+		piiReg.OnChange(func() {
+			if dc != nil {
+				dc.Flush()
+			}
+			if merkle != nil {
+				merkle.Clear()
+			}
+			log.Printf("[llmate-gate] registry changed (%d entries) → detection caches flushed", piiReg.Len())
+		})
 	}
 
 	// 审计日志。
@@ -232,9 +255,16 @@ func main() {
 
 	// 挂载调试面板路由（debug=true 时；--no-debug 时 cfg.Gateway.Debug=false 已生效）。
 	if cfg.Gateway.Debug {
-		dh := debug.NewHandler(cfg, guarded, repl, debugHub, debugStore, func(strategy string) error {
-			return repl.SetStrategy(strategy)
-		}, alog)
+		dh := debug.NewHandler(debug.Options{
+			Config:      cfg,
+			Detector:    guarded,
+			Replacer:    repl,
+			Hub:         debugHub,
+			Store:       debugStore,
+			RuleHook:    repl.SetStrategy,
+			AuditSource: alog,
+			Registry:    piiReg,
+		})
 		dh.Mount(srv.Mux())
 		log.Printf("[llmate-gate] debug panel mounted at %s/_debug", cfg.Gateway.Listen)
 	} else {
@@ -264,6 +294,35 @@ func main() {
 	if err := srv.Start(ctx, cfg.Gateway.Listen); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
+}
+
+// loadRegistry 按配置装载登记表；未启用时返回 nil（Wrap 会原样返回内层检测器）。
+//
+// 文件不存在视为空登记表：首次运行、或值全都由面板录入时就是这种状态。
+// 其余失败（读不了 / YAML 坏了 / 值不合规）一律 fatal —— 登记表是用户对「这些值
+// 一定会被脱敏」的承诺，带病启动等于悄悄毁约。
+func loadRegistry(cfg *config.Config) *registry.Registry {
+	if !cfg.Detection.Registry.Enabled {
+		return nil
+	}
+	path := cfg.Detection.Registry.Path
+	values := map[string][]string{}
+	if vals, err := registry.LoadFile(path); err != nil {
+		if !os.IsNotExist(err) {
+			log.Fatalf("registry: %v", err)
+		}
+		log.Printf("[llmate-gate] registry file %s not found, starting empty", path)
+	} else {
+		values = vals
+	}
+	if err := registry.Validate(values); err != nil {
+		log.Fatalf("%v", err)
+	}
+	reg := registry.New()
+	reg.Set(values)
+	log.Printf("[llmate-gate] registry enabled: %d entries in %d types (%s)",
+		reg.Len(), len(reg.Get()), path)
+	return reg
 }
 
 // deriveSessionKey 派生会话级仿真密钥（重启即失效；可用 GATEWAY_SESSION_KEY 固定）。

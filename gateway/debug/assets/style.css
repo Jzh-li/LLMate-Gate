@@ -186,8 +186,14 @@ textarea { width: 100%; resize: vertical; font-family: ui-monospace, monospace; 
 .dict-empty { color: var(--text-dim); text-align: center; padding: 18px 0 !important; }
 .dict-actions { display: flex; align-items: center; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
 .dict-actions .hint { margin-left: auto; }
+.dict-actions .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 #dictYAML { margin-top: 12px; }
 #dictYAML.hidden { display: none; }
+
+/* 登记表：明文 PII 提示；未启用时整块转成警示色 */
+#regNotice { line-height: 1.7; }
+#regNotice code { background: var(--panel-2); padding: 2px 6px; border-radius: 3px; }
+#regNotice.off { color: var(--warn); }
 
 .btn.tiny { padding: 4px 8px; font-size: 11px; line-height: 1; }
 .btn.danger:hover { border-color: var(--err); color: var(--err); }

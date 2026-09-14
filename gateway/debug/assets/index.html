@@ -163,7 +163,30 @@
       </div>
 
       <div class="block">
-        <h4>仿真词典 <span class="hint">命中的用你的仿真值，未命中回落内置词表 + 确定性派生</span></h4>
+        <h4>登记表 <span class="hint">先认出来：你自报的真实 PII 值，命中即脱敏</span></h4>
+        <p class="hint" id="regNotice">
+          姓名、地址这类值没有格式约束，模型难免漏检。把真实值登记在这里，
+          出现即命中，且不受阈值与类型白名单限制（保召回）。
+          这里填的是<strong>真实 PII</strong>，明文存在 <code id="regPath">—</code>，
+          别提交进版本库、别放共享目录。
+        </p>
+        <table class="mapping-table dict-table">
+          <thead><tr>
+            <th class="col-type">实体类型</th>
+            <th>值（原样出现即命中，英文大小写不敏感）</th>
+            <th class="col-del"></th>
+          </tr></thead>
+          <tbody id="regBody"></tbody>
+        </table>
+        <div class="dict-actions">
+          <button id="regAdd" class="btn">＋ 添加一行</button>
+          <button id="regSave" class="btn primary">保存并生效</button>
+          <span id="regStatus" class="hint"></span>
+        </div>
+      </div>
+
+      <div class="block">
+        <h4>仿真词典 <span class="hint">再换掉：命中的用你的仿真值，未命中回落内置词表 + 确定性派生</span></h4>
         <table class="mapping-table dict-table">
           <thead><tr>
             <th class="col-type">实体类型</th>

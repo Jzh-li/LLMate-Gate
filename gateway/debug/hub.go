@@ -23,6 +23,7 @@ const (
 	EventUpstreamResponse EventType = "upstream.response"
 	EventRestoreDone      EventType = "restore.done"
 	EventRuleChanged      EventType = "rule.changed"
+	EventRegistryChanged  EventType = "registry.changed"
 )
 
 // WSMessage 推送给前端的事件信封（契约 §10.2）。

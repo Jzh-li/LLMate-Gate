@@ -16,6 +16,7 @@ import (
 	"gateway/internal/audit"
 	"gateway/internal/config"
 	"gateway/internal/detector"
+	"gateway/internal/registry"
 	"gateway/internal/replacer"
 	"gateway/pkg/types"
 )
@@ -33,11 +34,12 @@ type AuditSource interface {
 
 // Handler 调试面板路由聚合（契约 §10 / UI设计 §0-4）。
 type Handler struct {
-	hub      *Hub
-	store    *TrafficRecordStore
-	cfg      *config.Config
-	det      detector.Client
-	repl     replacer.Replacer
+	hub   *Hub
+	store *TrafficRecordStore
+	cfg   *config.Config
+	det   detector.Client
+	repl  replacer.Replacer
+	reg   *registry.Registry
 	// 规则热加载钩子（外部设置）：PUT /_api/rules 时调用
 	ruleHook func(strategy string) error
 	rulesMu  sync.Mutex
@@ -45,16 +47,36 @@ type Handler struct {
 	auditSrc AuditSource
 }
 
-// NewHandler 构造 debug Handler；ruleHook / auditSrc 可选（nil 时对应端点降级）。
-func NewHandler(cfg *config.Config, det detector.Client, repl replacer.Replacer, hub *Hub, store *TrafficRecordStore, ruleHook func(string) error, auditSrc AuditSource) *Handler {
+// Options 构造 Handler 的依赖。
+//
+// 用结构体而不是长参数列表：这些依赖大多可空（nil 时对应端点降级），
+// 摊成位置参数后调用点会变成一长串难以核对的 nil。
+type Options struct {
+	Config   *config.Config
+	Detector detector.Client
+	Replacer replacer.Replacer
+	Hub      *Hub
+	Store    *TrafficRecordStore
+	// RuleHook 策略热加载钩子；nil 时 PUT /_api/rules 返回 501。
+	RuleHook func(strategy string) error
+	// AuditSource 近期审计事件源；nil 时 /_api/audit 返回空。
+	AuditSource AuditSource
+	// Registry 登记表；nil（未启用）时 /_api/registry 返回 501。
+	// 落盘路径取自 Config.Detection.Registry.Path。
+	Registry *registry.Registry
+}
+
+// NewHandler 构造 debug Handler。
+func NewHandler(o Options) *Handler {
 	return &Handler{
-		hub:      hub,
-		store:    store,
-		cfg:      cfg,
-		det:      det,
-		repl:     repl,
-		ruleHook: ruleHook,
-		auditSrc: auditSrc,
+		hub:      o.Hub,
+		store:    o.Store,
+		cfg:      o.Config,
+		det:      o.Detector,
+		repl:     o.Replacer,
+		reg:      o.Registry,
+		ruleHook: o.RuleHook,
+		auditSrc: o.AuditSource,
 	}
 }
 
@@ -72,6 +94,8 @@ func NewHandler(cfg *config.Config, det detector.Client, repl replacer.Replacer,
 //   PUT    /_api/rules     → 更新策略（热加载）
 //   GET    /_api/dictionary → 仿真词典
 //   PUT    /_api/dictionary → 整体替换仿真词典（热加载）
+//   GET    /_api/registry  → 登记表（明文 PII，仅回环可访问）
+//   PUT    /_api/registry  → 整体替换登记表并落盘（热加载 + 刷检测缓存）
 func (h *Handler) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/_debug", h.serveIndex)
 	mux.HandleFunc("/_debug/", h.serveAsset)
@@ -81,6 +105,7 @@ func (h *Handler) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/_api/replace", h.handleReplace)
 	mux.HandleFunc("/_api/rules", h.handleRules)
 	mux.HandleFunc("/_api/dictionary", h.handleDictionary)
+	mux.HandleFunc("/_api/registry", h.handleRegistry)
 	mux.HandleFunc("/_api/audit", h.handleAudit)
 }
 
@@ -429,6 +454,81 @@ func (h *Handler) handleDictionary(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.repl.SetDictionary(req.Dictionary)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	default:
+		w.Header().Set("Allow", "GET, PUT")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// registryResp GET /_api/registry 出参。
+type registryResp struct {
+	Registry map[string][]string `json:"registry"`
+	// Types 可登记的全部实体类型（契约 §6.1 权威表），供面板下拉渲染。
+	Types []string `json:"types"`
+	// Enabled 登记表是否已启用（未启用时面板提示去改配置，PUT 也是 501）。
+	Enabled bool `json:"enabled"`
+	// Path 登记表落盘路径，面板展示用——用户得知道自己的 PII 写到哪个文件了。
+	Path string `json:"path"`
+}
+
+// registryReq PUT /_api/registry 入参。
+type registryReq struct {
+	Registry map[string][]string `json:"registry"`
+}
+
+// handleRegistry GET 读取登记表；PUT 整体替换（校验 → 落盘 → 生效）。
+//
+// 整体替换而非增量合并，理由同仿真词典：面板持有完整视图，「删掉一条」只有
+// 整体写回才能表达。
+//
+// 顺序是「校验 → 落盘 → 生效」，每一步失败都就此打住：写坏文件再生效会让
+// 下次启动加载失败、整张登记表全丢；生效了但没落盘则会让用户以为重启后还在。
+// 生效那一步会触发 OnChange → 刷检测缓存，所以刚登记的值对同一句话立刻就管用。
+func (h *Handler) handleRegistry(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		values := map[string][]string{}
+		if h.reg != nil {
+			if v := h.reg.Get(); v != nil {
+				values = v
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf)
+		// 值里可能有 < > &（URL 查询串、邮件签名），别转义成 < 让人看不懂
+		enc.SetEscapeHTML(false)
+		_ = enc.Encode(registryResp{
+			Registry: values,
+			Types:    types.AllTypes(),
+			Enabled:  h.reg != nil,
+			Path:     h.cfg.Detection.Registry.Path,
+		})
+		_, _ = w.Write(buf.Bytes())
+	case http.MethodPut:
+		var req registryReq
+		if err := decodeJSON(r, &req); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		if h.reg == nil {
+			writeErr(w, http.StatusNotImplemented, "not_implemented",
+				"registry is disabled; set detection.registry.enabled=true (with detection.registry.path) and restart")
+			return
+		}
+		if err := registry.Validate(req.Registry); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid_registry", err.Error())
+			return
+		}
+		path := h.cfg.Detection.Registry.Path
+		if err := registry.SaveFile(path, req.Registry); err != nil {
+			writeErr(w, http.StatusInternalServerError, "registry_save_failed", err.Error())
+			return
+		}
+		h.reg.Set(req.Registry)
+		h.hub.Publish(string(EventRegistryChanged), map[string]int{"entries": h.reg.Len()})
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	default:

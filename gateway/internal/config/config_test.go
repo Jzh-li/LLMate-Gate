@@ -233,3 +233,19 @@ func TestSimulatableTypes(t *testing.T) {
 	got[0] = "mutated"
 	require.NotEqual(t, "mutated", SimulatableTypes()[0], "返回的必须是副本")
 }
+
+// TestExampleConfig_Loads 随仓库发布的示例配置必须能被加载。
+//
+// 示例配置是文档的一部分，最容易在加字段时忘了同步、或者写出 schema 里不存在的
+// 键（yaml.v3 默认不报未知字段，写错了会静默失效，用户以为配上了其实没有）。
+// 这条测试把示例配置钉在 CI 里，改 config 结构时它会先响。
+func TestExampleConfig_Loads(t *testing.T) {
+	p := filepath.Join("..", "..", "configs", "config.example.yaml")
+	if _, err := os.Stat(p); err != nil {
+		t.Fatalf("示例配置应当随仓库发布: %v", err)
+	}
+	c, err := Load(p)
+	require.NoError(t, err)
+	require.Equal(t, ":8400", c.Gateway.Listen)
+	require.Equal(t, "placeholder", c.Replacement.Strategy)
+}

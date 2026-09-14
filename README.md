@@ -67,11 +67,24 @@ const openai = new OpenAI({
 cat > ~/.local/share/llmate-gate/config.yaml <<EOF
 gateway:
   listen: ":8400"
-  upstream:
-    base_url: "https://api.openai.com"
-    api_key: "$OPENAI_API_KEY"
+  upstream: "https://api.openai.com"        # 必填
+  upstream_api_key: "${OPENAI_API_KEY}"     # 转发时用它换掉客户端凭证
 EOF
 llmate-gate --config ~/.local/share/llmate-gate/config.yaml
+```
+
+接 Claude Code 这类走 Anthropic 协议的客户端，用 `upstreams[]` 把 `/v1/messages`
+单独指到 Anthropic 兼容上游（详见「配置」一节）：
+
+```yaml
+gateway:
+  listen: ":8400"
+  upstream: "https://api.openai.com"                    # OpenAI 侧兜底
+  upstreams:
+    - protocol: "anthropic"
+      base_url: "https://api.deepseek.com/anthropic"
+      api_key: "${DEEPSEEK_API_KEY}"
+      api_version: "2023-06-01"
 ```
 
 ## 🎯 为什么需要 LLMate Gate
@@ -93,12 +106,15 @@ LLMate Gate 的定位：在中文语境下，用格式保持的仿真替换（"�
 
 - 🇨🇳 **中文一等公民**：集成 PII Engineer（基于 GLiNER2 / mDeBERTa-v3-base，中文 PII 检测 F1 0.918，CPU-only ONNX Runtime 推理，~180ms/条），专门覆盖中文姓名、身份证号（18 位 + 校验位）、手机号（三大运营商号段）、银行卡（Luhn 校验）、中文地址等实体。
 - 🎭 **中文格式保持仿真替换**：v1 占位符替换 → v1.1 仿真替换。生成的假数据保持原格式、语义类型、性别/长度一致，云端模型仍能理解上下文。
-- 🔌 **OpenAI 兼容透明代理**：默认监听 :8400，Cursor / Continue / Claude Code / 任意 OpenAI SDK 改一行 base_url 即可接入。
+- 📇 **仿真词典（自定义真值→假值）**：内置仿真是随机派生的，可读性一般；词典让你指定「张三 → 王晓明」这类固定映射，命中即用、未命中回落内置派生。可在调试面板里直接编辑，改完即时生效、不用重启。
+- 🔌 **OpenAI / Anthropic 双协议透明代理**：同一个入口同时接 OpenAI 兼容端点与 Anthropic 兼容端点，按 `gateway.upstreams[]` 配置各走各的上游（地址、鉴权方式、路径前缀都能分别配），适配国内厂商的协议差异。
+- 🚦 **bypass 档位**：一个「网关在位但不改动流量」的开关，用来确认链路与延迟开销、或在上游拒包时快速排除脱敏层。仅建议本机调试/前置拓扑使用。
 - 🤖 **Agent tool-call 参数扫描**：递归扫描 tool_calls[].function.arguments 里的所有字符串值，按参数类型差异化处理。
 - 🌊 **流式还原**：SSE 流式响应场景下，用 trie 缓冲做边界对齐，保证占位符在流中被完整还原。
 - 🧠 **detection_cache**：绑定 conversation_id 的增量检测缓存，避免 Agent 多轮对话里对同一段 PII 重复检测，将 40s+ 的延迟降到 P99 < 2s。
 - 🔒 **Fail-closed**：检测引擎异常即阻断请求，绝不"裸奔"放行。
 - 🔍 **可审计**：每一次脱敏/还原都生成结构化审计日志，可导出合规报告（对标 PIPL / GDPR / 等保 2.0）。
+- 🎛️ **内嵌调试面板**：`/_debug` 提供流量回放、Playground 试脱敏、策略热切换、词典编辑、审计查询，全部无需改配置或重启（见「调试面板」一节）。
 - 🖥️ **VS Code 原生扩展 + Claude Code hooks**：编辑器内高亮 + 自动配置 base_url；Claude Code Pre-tool/Post-tool 拦截。
 - 🪶 **轻量桌面 UI（Tauri）**：桌面端可视化管理检测规则、查看审计面板。
 - 📊 **cn-pii-bench**：我们开源的中文 PII 检测基准数据集 + 测评框架，覆盖中文姓名/身份证/手机/银行卡/地址 + tool-call 参数 + 中英混合文本。
@@ -290,6 +306,16 @@ gateway:
   listen: ":8400"
   upstream: "https://api.openai.com"
   auth_token: "${GATEWAY_AUTH_TOKEN}"
+  # 可选：按协议分别声明上游。不写则只有上面那一条 openai 上游。
+  upstreams:
+    - protocol: "anthropic"                 # /v1/messages 走这里
+      base_url: "https://api.deepseek.com/anthropic"
+      api_key: "${DEEPSEEK_API_KEY}"        # Anthropic → x-api-key
+      api_version: "2023-06-01"
+    - protocol: "openai"                    # /v1/chat/completions 等走这里
+      base_url: "https://api.deepseek.com"
+      api_key: "${DEEPSEEK_API_KEY}"        # OpenAI → Authorization: Bearer
+      # path_prefix: "/v4"                # 智谱 GLM；DashScope 是 /compatible-mode/v1
 
 detection:
   engine: "pii-engineer"      # 中文 NER (F1 0.918)
@@ -300,12 +326,21 @@ detection:
     ttl: "30m"
 
 replacement:
-  strategy: "placeholder"     # v1: placeholder → v1.1: simulate
+  # placeholder : <<zh_person_name_1>> 式占位符
+  # simulate    : 格式保持的仿真值（张三 → 李雷）
+  # bypass      : 整条原样透传、完全不脱敏（仅本机调试 / 前置拓扑）
+  strategy: "simulate"
   simulate_zh:
     person_name: true         # 张三 → 李雷（性别/长度一致）
     phone: true               # 13800138000 → 13900139000
     id_card: true             # 校验位合法
     bank_card: true           # Luhn 校验合法
+    # 自定义词典：命中即用你给的假值，未命中回落内置派生。
+    # 仿真值必须全局唯一——还原表是一张平表，两个真值共用一个假值会互相覆盖。
+    dictionary:
+      zh_person_name:
+        "张三": "王晓明"
+        "李四": "陈静"
   irreversible:
     - api_key
     - password
@@ -320,6 +355,51 @@ audit:
   enabled: true
   export: ["pip", "gdpr"]     # 导出合规报告格式
 ```
+
+## 🎛️ 调试面板
+
+`debug: true` 时网关内嵌一个调试面板，默认只绑定回环地址：
+
+```
+http://127.0.0.1:8400/_debug
+```
+
+四个页签：
+
+| 页签 | 能做什么 |
+| --- | --- |
+| **流量** | 实时（WebSocket）看到每一发请求：原文 / 脱敏后 / 检出的实体 / 映射表 / 上游响应 / 还原结果，以及耗时与 outcome。用来排查「为什么这条没被脱敏」最直接。 |
+| **Playground** | 粘一段文本，选「仅检测」或「检测 + 替换」，立刻看到命中的实体与替换结果。调词典和阈值时不用真的发请求。 |
+| **规则** | 当前生效的策略与不可逆类型；三个策略开关（placeholder / simulate / bypass）点一下即切换；仿真词典的增删改。全部即时生效，**不需要改配置或重启**。 |
+| **审计** | 查询最近的审计事件（可设条数、可自动刷新），点某一行展开完整 JSON。 |
+
+### 仿真词典怎么用
+
+「规则」页下半部分是词典编辑器：每行是「实体类型 / 真实值 / 仿真值」。
+
+- 命中词典的实体直接用你写的仿真值；没命中的回落内置词表 + 确定性派生，两条路并存，所以不必把全部真值都填进去。
+- 只在 `strategy: simulate` 时生效（placeholder / bypass 下词典不参与）。
+- 前端和后端都会拦「仿真值重复」。**仿真值必须全局唯一，跨类型也算**——还原表是 `map[哨兵串]原值` 一张平表、不分类型分桶，两个真实值共用一个仿真值就会在还原时互相覆盖，其中一个永久还原不回来。服务端在配置加载期和面板提交时用同一套规则校验。
+- 词典只存在运行时内存里。要跨重启保留，点「导出」把生成的 YAML 片段粘进 config 的 `replacement.simulate_zh.dictionary`。
+
+### 面板 API
+
+面板背后是一组普通 HTTP 端点，可以脱离 UI 直接用：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/_api/traffic` | 流量环形缓冲快照 |
+| `DELETE` | `/_api/traffic` | 清空流量记录 |
+| `POST` | `/_api/detect` | 只做检测，body `{"text": "..."}` |
+| `POST` | `/_api/replace` | 检测 + 替换，body `{"text": "...", "strategy": "simulate"}` |
+| `GET` | `/_api/rules` | 当前策略与不可逆类型 |
+| `PUT` | `/_api/rules` | 切换策略，body `{"strategy": "bypass"}` |
+| `GET` | `/_api/dictionary` | 当前仿真词典 + 可仿真的实体类型列表 |
+| `PUT` | `/_api/dictionary` | 整体替换仿真词典（不是增量合并） |
+| `GET` | `/_api/audit?limit=N` | 近期审计事件 |
+| `WS` | `/ws/events` | 实时事件流 |
+
+> ⚠️ 面板能看到**明文 PII**（Playground 与流量详情都含原文）。它默认只绑 `127.0.0.1` 且不鉴权，不要改 `debug_bind` 到外网地址；对外部署请用 `--no-debug` 彻底关掉。
 
 ## 🤖 Tool-call 参数扫描
 

@@ -11,6 +11,23 @@ gateway:
   debug_bind: "127.0.0.1"                # 面板仅绑定回环地址
   log_level: "info"
 
+  # 按协议声明的多上游（可选）。网关入口同时暴露 OpenAI 兼容
+  # （/v1/chat/completions 等）与 Anthropic 兼容（/v1/messages）两类端点，
+  # 不同厂商这两类端点的地址/鉴权/路径前缀都不一样，用这个列表声明各走哪里。
+  #   protocol   : openai | anthropic
+  #   path_prefix: 替换入口路径的 /v1 段（智谱 GLM 是 /v4，DashScope 是
+  #                /compatible-mode/v1；留空则原样透传 /v1）
+  #   api_key    : 留空 = 透传模式，客户端自己的鉴权头原样过（gate 前置在
+  #                ccswitch 之类的下一跳之前时用这种，gate 不持凭据）
+  # 不写 upstreams 时等价于只有一条 openai 上游（即上面的 gateway.upstream）。
+  # upstreams:
+  #   - protocol: "anthropic"
+  #     base_url: "https://api.deepseek.com/anthropic"
+  #     api_key: "${DEEPSEEK_API_KEY}"
+  #     api_version: "2023-06-01"
+  #   - protocol: "openai"
+  #     base_url: "https://api.deepseek.com"
+
 detection:
   # pii-engineer : 调用 PII Engineer sidecar（Rust/ONNX，中文 F1 0.918）
   # regex        : 内置中文正则引擎，无需模型，开箱即用（默认）
@@ -37,12 +54,30 @@ detection:
     max_entries: 10000
 
 replacement:
-  strategy: "placeholder"                # placeholder | simulate(v1.1)
+  # placeholder : <<zh_person_name_1>> 式占位符
+  # simulate    : 格式保持的仿真值（张三 → 李雷）
+  # bypass      : 整条请求原样透传，完全不脱敏（只适合本机调试/前置拓扑）
+  strategy: "placeholder"
   simulate_zh:
     person_name: true
     phone: true
     id_card: true
     bank_card: true
+    # 自定义词典：entity_type → (真实值 → 仿真值)。命中者直接用你给的仿真值，
+    # 未命中回落内置词表 + HMAC 派生。只在 strategy=simulate 时生效。
+    #
+    # ⚠️ 仿真值必须全局唯一（跨类型也算）。还原表是 `map[哨兵串]原值` 一张平表、
+    #    不分类型分桶，两个真实值共用一个仿真值会互相覆盖，导致其中一个永久
+    #    还原不回来。网关在配置加载期就会拒绝这种配置。
+    #
+    # 也可以在调试面板「规则」页直接编辑（无需重启），编辑完用「导出」拿到
+    # YAML 片段粘回这里即可持久化。
+    # dictionary:
+    #   zh_person_name:
+    #     "张三": "王晓明"
+    #     "李四": "陈静"
+    #   zh_address:
+    #     "北京市朝阳区建国路 88 号": "上海市浦东新区世纪大道 100 号"
   irreversible:
     - api_key
     - password

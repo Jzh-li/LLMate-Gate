@@ -7,8 +7,7 @@ gateway:
   auth_token: "${GATEWAY_AUTH_TOKEN}"    # 客户端访问网关的令牌（支持 ${ENV} 展开）
   upstream_api_key: "${OPENAI_API_KEY}"  # 转发上游时使用的密钥，不透传客户端凭证
   request_timeout: "30s"
-  debug: true                            # 内嵌调试面板（--no-debug 可彻底关闭）
-  debug_bind: "127.0.0.1"                # 面板仅绑定回环地址
+  debug: true                            # 内嵌调试面板（--no-debug 可彻底关闭；面板恒为回环可访问）
   log_level: "info"
 
   # 按协议声明的多上游（可选）。网关入口同时暴露 OpenAI 兼容

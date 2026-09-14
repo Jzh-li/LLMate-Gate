@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -97,16 +98,46 @@ func NewHandler(o Options) *Handler {
 //   GET    /_api/registry  → 登记表（明文 PII，仅回环可访问）
 //   PUT    /_api/registry  → 整体替换登记表并落盘（热加载 + 刷检测缓存）
 func (h *Handler) Mount(mux *http.ServeMux) {
-	mux.HandleFunc("/_debug", h.serveIndex)
-	mux.HandleFunc("/_debug/", h.serveAsset)
-	mux.HandleFunc("/ws/events", h.serveWS)
-	mux.HandleFunc("/_api/traffic", h.handleTraffic)
-	mux.HandleFunc("/_api/detect", h.handleDetect)
-	mux.HandleFunc("/_api/replace", h.handleReplace)
-	mux.HandleFunc("/_api/rules", h.handleRules)
-	mux.HandleFunc("/_api/dictionary", h.handleDictionary)
-	mux.HandleFunc("/_api/registry", h.handleRegistry)
-	mux.HandleFunc("/_api/audit", h.handleAudit)
+	mux.HandleFunc("/_debug", loopbackOnly(h.serveIndex))
+	mux.HandleFunc("/_debug/", loopbackOnly(h.serveAsset))
+	mux.HandleFunc("/ws/events", loopbackOnly(h.serveWS))
+	mux.HandleFunc("/_api/traffic", loopbackOnly(h.handleTraffic))
+	mux.HandleFunc("/_api/detect", loopbackOnly(h.handleDetect))
+	mux.HandleFunc("/_api/replace", loopbackOnly(h.handleReplace))
+	mux.HandleFunc("/_api/rules", loopbackOnly(h.handleRules))
+	mux.HandleFunc("/_api/dictionary", loopbackOnly(h.handleDictionary))
+	mux.HandleFunc("/_api/registry", loopbackOnly(h.handleRegistry))
+	mux.HandleFunc("/_api/audit", loopbackOnly(h.handleAudit))
+}
+
+// loopbackOnly 只放行来自回环地址的请求。
+//
+// 调试面板能看到明文 PII（Playground 原文、流量详情、登记表），且默认不鉴权，
+// 所以它不能随 listen 绑定到 0.0.0.0 就对外可达。这里按 TCP 对端地址（RemoteAddr）
+// 判定，不读 X-Forwarded-For——那个头是客户端可控的，读了等于把守卫交出去。
+func loopbackOnly(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !isLoopbackAddr(r.RemoteAddr) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": "debug panel is loopback-only; use --no-debug for remote deployments",
+			})
+			return
+		}
+		next(w, r)
+	}
+}
+
+// isLoopbackAddr 判断 RemoteAddr 的对端主机是否为回环地址；解析失败一律视为非回环
+// （fail-closed：宁可挡住，不可放行一个 PII 面板）。
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr // 无端口形式（如裸 IP）
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
 }
 
 // ---------- handlers ----------

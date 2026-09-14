@@ -7,7 +7,6 @@ gateway:
   upstream_api_key: "mock-llm-no-auth-needed"
   request_timeout: "10s"
   debug: false
-  debug_bind: "127.0.0.1"
   log_level: "info"
 
 detection:

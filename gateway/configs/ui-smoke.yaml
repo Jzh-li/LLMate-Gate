@@ -7,7 +7,6 @@ gateway:
   upstream_api_key: "ui-smoke-no-auth"
   request_timeout: "3s"
   debug: true
-  debug_bind: "127.0.0.1"
   log_level: "info"
 
 detection:

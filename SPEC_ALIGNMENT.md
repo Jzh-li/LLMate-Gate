@@ -33,7 +33,7 @@
 | A9 | detection_cache 键绑定 conversation_id | 00 §12 P2、02 §8.2 | `internal/cache` + `merkle.go` |
 | A10 | per-type fate 策略引擎 | 00 §12 P2、02 §6.1 | `internal/policy` + `config.Replacement.PerTypeFate` |
 | A11 | tool-call 参数逐值脱敏（JSON 键永不脱敏） | 00 §12 P2 | `proxy.transform` + E2 + `TestProxy_ToolCall_*` |
-| A12 | 内嵌调试面板：`go:embed` + `/_debug` + `/ws/events` + `/_api/{traffic,detect,replace,rules}` + `--no-debug` + 仅绑 127.0.0.1 | UI §1.2/§4.1、02 §10.1 | `gateway/debug/handler.go:74-81`；默认 `Debug:true`、`DebugBind:127.0.0.1` |
+| A12 | 内嵌调试面板：`go:embed` + `/_debug` + `/ws/events` + `/_api/{traffic,detect,replace,rules}` + `--no-debug` + 仅回环可访问（按 TCP 对端地址强制校验） | UI §1.2/§4.1、02 §10.1 | `gateway/debug/handler.go` `Mount`/`loopbackOnly`；默认 `Debug:true` |
 | A13 | 6 个 WS 事件类型（request.received / detection.done / replacement.done / upstream.response / restore.done / rule.changed） | UI §4.2、02 §10.2 | 代码中 6 个全部存在 |
 | A14 | 面板 4 个 Tab（流量 / Playground / 规则 / 审计） | 00 §4.3、UI §2.1-2.4 | 审计 Tab 已交付并端到端验证 |
 | A15 | UI 冒烟 D1-D6 | 03 §3.4、UI §5.1 | `e2e/ui_smoke.sh` 11/11 PASS（含 D5 `--no-debug` 全 404、D6） |

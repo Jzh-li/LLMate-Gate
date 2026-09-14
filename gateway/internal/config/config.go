@@ -35,7 +35,6 @@ type GatewayConfig struct {
 	Upstreams      []UpstreamConfig `yaml:"upstreams"`
 	RequestTimeout time.Duration    `yaml:"request_timeout"`
 	Debug          bool             `yaml:"debug"`
-	DebugBind      string           `yaml:"debug_bind"`
 	LogLevel       string           `yaml:"log_level"`
 }
 
@@ -147,7 +146,6 @@ func Default() *Config {
 			Upstream:       "https://api.openai.com",
 			RequestTimeout: 30 * time.Second,
 			Debug:          true,
-			DebugBind:      "127.0.0.1",
 			LogLevel:       "info",
 		},
 		Detection: DetectionConfig{
@@ -221,7 +219,6 @@ func expandEnvDeep(c *Config) {
 		c.Gateway.Upstreams[i].APIVersion = expandEnv(c.Gateway.Upstreams[i].APIVersion)
 		c.Gateway.Upstreams[i].PathPrefix = expandEnv(c.Gateway.Upstreams[i].PathPrefix)
 	}
-	c.Gateway.DebugBind = expandEnv(c.Gateway.DebugBind)
 	c.Vault.Path = expandEnv(c.Vault.Path)
 	c.Audit.Path = expandEnv(c.Audit.Path)
 	c.Detection.Sidecar.Endpoint = expandEnv(c.Detection.Sidecar.Endpoint)

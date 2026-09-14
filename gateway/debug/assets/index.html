@@ -105,7 +105,7 @@
       <label>策略
         <select id="pgStrategy">
           <option value="placeholder">占位符（v1）</option>
-          <option value="simulate" disabled>仿真替换（v1.1 可用）</option>
+          <option value="simulate">仿真替换</option>
         </select>
       </label>
       <button id="pgDetect" class="btn primary">仅检测</button>
@@ -133,21 +133,55 @@
 
   <!-- Tab 3: 规则 -->
   <section id="tab-rules" class="tab-pane">
-    <div class="block">
-      <h4>当前策略</h4>
-      <p>替换策略：<code id="ruleStrategy">placeholder</code></p>
-      <p>不可逆类型（需重启生效）：<code id="ruleIrreversible">—</code></p>
-    </div>
-    <div class="block">
-      <h4>热加载</h4>
-      <label>新策略
-        <select id="ruleStrategySelect">
-          <option value="placeholder">占位符（placeholder）</option>
-          <option value="simulate">仿真（simulate）</option>
-        </select>
-      </label>
-      <button id="ruleApply" class="btn primary">应用</button>
-      <span id="ruleStatus" class="hint"></span>
+    <div class="page">
+      <div class="block">
+        <h4>当前状态</h4>
+        <div class="kv">
+          <div class="kv-item"><span class="kv-k">替换策略</span><code id="ruleStrategy">—</code></div>
+          <div class="kv-item"><span class="kv-k">不可逆类型</span><code id="ruleIrreversible">—</code><span class="hint">改这项需重启</span></div>
+        </div>
+      </div>
+
+      <div class="block">
+        <h4>策略开关</h4>
+        <p class="hint">点一下即切换，热加载生效，不用重启网关。</p>
+        <div class="seg" id="ruleSeg">
+          <button type="button" class="seg-item" data-value="bypass">
+            <span class="seg-title">透传</span>
+            <span class="seg-sub">bypass · 不脱敏，原样转发</span>
+          </button>
+          <button type="button" class="seg-item" data-value="placeholder">
+            <span class="seg-title">占位符</span>
+            <span class="seg-sub">placeholder · 换成 &lt;&lt;type_n&gt;&gt;</span>
+          </button>
+          <button type="button" class="seg-item" data-value="simulate">
+            <span class="seg-title">仿真</span>
+            <span class="seg-sub">simulate · 格式一致的假数据</span>
+          </button>
+        </div>
+        <div class="row-end"><span id="ruleStatus" class="hint"></span></div>
+      </div>
+
+      <div class="block">
+        <h4>仿真词典 <span class="hint">命中的用你的仿真值，未命中回落内置词表 + 确定性派生</span></h4>
+        <table class="mapping-table dict-table">
+          <thead><tr>
+            <th class="col-type">实体类型</th>
+            <th>真实值</th>
+            <th class="col-arrow"></th>
+            <th>仿真值</th>
+            <th class="col-del"></th>
+          </tr></thead>
+          <tbody id="dictBody"></tbody>
+        </table>
+        <div class="dict-actions">
+          <button id="dictAdd" class="btn">＋ 添加一行</button>
+          <button id="dictSave" class="btn primary">保存并生效</button>
+          <button id="dictExport" class="btn">导出 YAML</button>
+          <span id="dictStatus" class="hint"></span>
+        </div>
+        <pre id="dictYAML" class="code hidden"></pre>
+      </div>
     </div>
   </section>
 

@@ -240,34 +240,209 @@
     }
   });
 
-  // ----- 规则 -----
+  // ----- 规则：策略开关 -----
+  let currentStrategy = "placeholder";
+
+  const STRATEGY_LABEL = {
+    bypass: "bypass（透传，不脱敏）",
+    placeholder: "placeholder（占位符）",
+    simulate: "simulate（仿真）",
+  };
+
+  function setHint(el, text, kind) {
+    if (!el) return;
+    el.textContent = text;
+    el.className = "hint" + (kind ? " " + kind : "");
+  }
+
+  function renderSeg() {
+    $$("#ruleSeg .seg-item").forEach((b) => {
+      b.classList.toggle("active", b.dataset.value === currentStrategy);
+    });
+  }
+
   async function loadRules() {
     try {
       const resp = await fetch("/_api/rules");
       const data = await resp.json();
-      $("#ruleStrategy").textContent = data.strategy || "—";
+      currentStrategy = data.strategy || "placeholder";
+      $("#ruleStrategy").textContent = STRATEGY_LABEL[currentStrategy] || currentStrategy;
       $("#ruleIrreversible").textContent = (data.irreversible || []).join(", ") || "—";
-      $("#ruleStrategySelect").value = data.strategy || "placeholder";
+      renderSeg();
     } catch (e) { /* ignore */ }
   }
-  $("#ruleApply").addEventListener("click", async () => {
-    const strategy = $("#ruleStrategySelect").value;
-    $("#ruleStatus").textContent = "应用…";
+
+  // 点一下即切换。乐观更新 + 失败回滚，避免用户以为切过去了。
+  $$("#ruleSeg .seg-item").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const strategy = btn.dataset.value;
+      if (strategy === currentStrategy) return;
+      const prev = currentStrategy;
+      currentStrategy = strategy;
+      renderSeg();
+      setHint($("#ruleStatus"), "切换中…");
+      try {
+        const resp = await fetch("/_api/rules", {
+          method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ strategy }),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          currentStrategy = prev;
+          renderSeg();
+          setHint($("#ruleStatus"), "失败：" + ((err.error && err.error.message) || resp.status), "err");
+          return;
+        }
+        setHint($("#ruleStatus"), "已切到 " + (STRATEGY_LABEL[strategy] || strategy), "ok");
+        loadRules();
+      } catch (e) {
+        currentStrategy = prev;
+        renderSeg();
+        setHint($("#ruleStatus"), "失败：" + e.message, "err");
+      }
+    });
+  });
+
+  // ----- 规则：仿真词典 -----
+  let dictTypes = [];  // 可仿真的实体类型（服务端给出，顺序固定）
+  let dictRows = [];   // 编辑中的行：[{type, real, fake}]
+
+  function markDictDirty() {
+    setHint($("#dictStatus"), "有未保存的改动", "warn");
+  }
+
+  function renderDict() {
+    const tb = $("#dictBody");
+    if (dictRows.length === 0) {
+      tb.innerHTML = '<tr><td colspan="5" class="dict-empty">还没有自定义词条——所有实体都走内置词表 + 确定性派生。</td></tr>';
+      return;
+    }
+    tb.innerHTML = dictRows.map((row, i) => {
+      const opts = dictTypes.map((t) =>
+        `<option value="${escape(t)}"${t === row.type ? " selected" : ""}>${escape(t)}</option>`).join("");
+      return `<tr>
+        <td><select data-i="${i}" data-f="type">${opts}</select></td>
+        <td><input data-i="${i}" data-f="real" value="${escape(row.real)}" placeholder="真实值，如 张三" /></td>
+        <td class="dict-arrow">→</td>
+        <td><input data-i="${i}" data-f="fake" value="${escape(row.fake)}" placeholder="仿真值，如 王五" /></td>
+        <td><button type="button" class="btn tiny danger" data-del="${i}" title="删除这一行">✕</button></td>
+      </tr>`;
+    }).join("");
+
+    // input 事件只改数据、不重渲染——重渲染会丢焦点。
+    $$("#dictBody [data-f]").forEach((el) => {
+      const handler = () => {
+        dictRows[Number(el.dataset.i)][el.dataset.f] = el.value;
+        markDictDirty();
+      };
+      el.addEventListener("input", handler);
+      el.addEventListener("change", handler);
+    });
+    // 删除才重渲染，索引与渲染时一致（input 期间行序没变）。
+    $$("#dictBody [data-del]").forEach((el) => {
+      el.addEventListener("click", () => {
+        dictRows.splice(Number(el.dataset.del), 1);
+        renderDict();
+        markDictDirty();
+      });
+    });
+  }
+
+  async function loadDictionary() {
     try {
-      const resp = await fetch("/_api/rules", {
+      const resp = await fetch("/_api/dictionary");
+      const data = await resp.json();
+      dictTypes = data.types || [];
+      const dict = data.dictionary || {};
+      dictRows = [];
+      Object.keys(dict).forEach((t) => {
+        Object.keys(dict[t] || {}).forEach((real) => {
+          dictRows.push({ type: t, real: real, fake: dict[t][real] });
+        });
+      });
+      dictRows.sort((a, b) => cmp(a.type, b.type) || cmp(a.real, b.real));
+      renderDict();
+      setHint($("#dictStatus"), dictRows.length === 0 ? "" : "共 " + dictRows.length + " 条", "ok");
+    } catch (e) { /* ignore */ }
+  }
+
+  function cmp(a, b) { return a < b ? -1 : a > b ? 1 : 0; }
+
+  // 收集编辑中的行 → PUT 的 dictionary 结构；顺带在客户端先拦一遍
+  // 「仿真值重复」——服务端也会拦，但本地报错能定位到具体哪两行。
+  // 注意是全局查重：还原表是一张平表，跨类型撞车一样会串。
+  function collectDict() {
+    const out = {};
+    const seenFake = {}; // 仿真值 → "类型/真实值"
+    for (const row of dictRows) {
+      const real = (row.real || "").trim();
+      const fake = (row.fake || "").trim();
+      if (!real && !fake) continue; // 整行空白 → 视作没填，忽略
+      if (!real) return { error: "有一行只填了仿真值，真实值为空" };
+      if (!fake) return { error: "「" + real + "」的仿真值为空" };
+      if (seenFake[fake]) {
+        return { error: "仿真值「" + fake + "」被 " + seenFake[fake] + " 和 " + row.type + "/" + real + " 共用，还原会串" };
+      }
+      seenFake[fake] = row.type + "/" + real;
+      if (!out[row.type]) out[row.type] = {};
+      out[row.type][real] = fake;
+    }
+    return { dict: out };
+  }
+
+  function dictCount(dict) {
+    return Object.keys(dict).reduce((n, t) => n + Object.keys(dict[t]).length, 0);
+  }
+
+  $("#dictAdd").addEventListener("click", () => {
+    dictRows.push({ type: dictTypes[0] || "zh_person_name", real: "", fake: "" });
+    renderDict();
+    markDictDirty();
+    const reals = $$("#dictBody input[data-f='real']");
+    if (reals.length) reals[reals.length - 1].focus();
+  });
+
+  $("#dictSave").addEventListener("click", async () => {
+    const res = collectDict();
+    if (res.error) { setHint($("#dictStatus"), res.error, "err"); return; }
+    setHint($("#dictStatus"), "保存中…");
+    try {
+      const resp = await fetch("/_api/dictionary", {
         method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ strategy }),
+        body: JSON.stringify({ dictionary: res.dict }),
       });
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({}));
-        $("#ruleStatus").textContent = "失败：" + (err.error && err.error.message || resp.status);
+        setHint($("#dictStatus"), "失败：" + ((err.error && err.error.message) || resp.status), "err");
         return;
       }
-      $("#ruleStatus").textContent = "已应用：" + strategy;
-      loadRules();
+      setHint($("#dictStatus"), "已生效（" + dictCount(res.dict) + " 条）", "ok");
+      loadDictionary();
     } catch (e) {
-      $("#ruleStatus").textContent = "失败：" + e.message;
+      setHint($("#dictStatus"), "失败：" + e.message, "err");
     }
+  });
+
+  // 词典只存在运行时。导出成 YAML 片段，粘进 config 才能跨重启保留。
+  $("#dictExport").addEventListener("click", () => {
+    const res = collectDict();
+    if (res.error) { setHint($("#dictStatus"), res.error, "err"); return; }
+    const pre = $("#dictYAML");
+    const types = Object.keys(res.dict).sort();
+    if (types.length === 0) {
+      pre.textContent = "# 词典为空，没有可导出的内容";
+    } else {
+      const lines = ["replacement:", "  simulate_zh:", "    dictionary:"];
+      types.forEach((t) => {
+        lines.push("      " + t + ":");
+        Object.keys(res.dict[t]).sort().forEach((real) => {
+          lines.push("        " + JSON.stringify(real) + ": " + JSON.stringify(res.dict[t][real]));
+        });
+      });
+      pre.textContent = lines.join("\n");
+    }
+    pre.classList.remove("hidden");
+    pre.scrollIntoView({ behavior: "smooth", block: "nearest" });
   });
 
   // ----- 审计 -----
@@ -327,6 +502,7 @@
   connectWS();
   refreshTraffic();
   loadRules();
+  loadDictionary();
   // 周期性拉取兜底（WS 断线期间不丢记录）
   setInterval(refreshTraffic, 3000);
   // 审计页自动刷新（仅当审计 Tab 激活且开启自动刷新）

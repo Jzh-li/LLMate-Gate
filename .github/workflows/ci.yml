@@ -34,6 +34,15 @@ env:
 #   DATA RACE 摘要写成 check run 注解。动机：job 日志只对 admin 可见（REST 返回
 #   403），外部排查时只能看到 "exit code 1" —— 一个说不出所以然的守门同样等于没有守门。
 #   详见 Specs/06 的 B-19。
+#
+# ✅ 2026-09-15 追加：job 依赖 —— needs 只表达「需要上游产出」，不表达「上游没绿就别跑」。
+#   原先除 verify 外 9 个 job 全部 needs: verify，于是 verify 一红它们全部 skipped，
+#   一次 CI 只产出一个信号，修复节奏被迫变成「修一个、露一个」：golangci-lint 的一条
+#   S1016 从 8bb0dbb 起就存在，却因 verify 连续三轮红而被跳过整整三轮（B-19 连带发现 1）。
+#   现在唯一的 needs 是 e2e → build（e2e 要跑的是**构建出来的二进制**，属于真实产物依赖）。
+#   其余 job 互不依赖，各自报结论。
+#   代价考量：本仓是公开仓库，Actions 分钟数不计量，而 10 个 job 并行后总墙钟时间
+#   不增反减（原来是「verify 串行 + 其余并行」）。真正的收益是一次红灯给出全部原因。
 
 jobs:
   verify:
@@ -80,7 +89,7 @@ jobs:
 
   build:
     name: build binaries
-    needs: verify
+    # 不写 needs: verify —— 见文件头「job 依赖」：门禁各自独立报结论。
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -110,6 +119,8 @@ jobs:
 
   e2e:
     name: e2e & ui smoke
+    # 全仓唯一的 needs：e2e 跑的是**构建出来的二进制**，这是真实产物依赖。
+    # （其余 job 虽也各自构建，但互不依赖——见文件头「job 依赖」。）
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -144,7 +155,7 @@ jobs:
 
   coverage:
     name: coverage
-    needs: verify
+    # 不写 needs: verify —— 见文件头「job 依赖」：门禁各自独立报结论。
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -196,7 +207,7 @@ jobs:
 
   bench:
     name: bench fixtures
-    needs: verify
+    # 不写 needs: verify —— 见文件头「job 依赖」：门禁各自独立报结论。
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
@@ -224,7 +235,7 @@ jobs:
 
   bench-gate:
     name: bench gate (L2 泄漏级 + 真对抗阈值)
-    needs: verify
+    # 不写 needs: verify —— 见文件头「job 依赖」：门禁各自独立报结论。
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -297,7 +308,7 @@ jobs:
 
   bench-baseline:
     name: bench baseline (真实引擎召回)
-    needs: verify
+    # 不写 needs: verify —— 见文件头「job 依赖」：门禁各自独立报结论。
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
@@ -322,7 +333,9 @@ jobs:
 
   lint:
     name: golangci-lint
-    needs: verify
+    # 不写 needs: verify —— 见文件头「job 依赖」：门禁各自独立报结论。
+    # 曾经写成 needs: verify，代价是 verify 一红 lint 就被跳过：一条 S1016 因此
+    # 连续三轮没被看见（Specs/06 B-19 连带发现 1）。
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -347,7 +360,7 @@ jobs:
 
   perf:
     name: bench perf guard
-    needs: verify
+    # 不写 needs: verify —— 见文件头「job 依赖」：门禁各自独立报结论。
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -388,7 +401,7 @@ jobs:
 
   vuln:
     name: govulncheck
-    needs: verify
+    # 不写 needs: verify —— 见文件头「job 依赖」：门禁各自独立报结论。
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:

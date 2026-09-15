@@ -485,13 +485,11 @@ func (c *Config) EffectiveUpstreams() []EffectiveUpstream {
 	}
 	var anthropic *EffectiveUpstream
 	for _, u := range c.Gateway.Upstreams {
-		e := EffectiveUpstream{
-			Protocol:   u.Protocol,
-			BaseURL:    u.BaseURL,
-			APIKey:     u.APIKey,
-			APIVersion: u.APIVersion,
-			PathPrefix: u.PathPrefix,
-		}
+		// 直接类型转换，而不是逐字段写字面量：两个结构体字段一一对应（同名同类型同序），
+		// 转换让「必须保持同构」成为**编译期约束** —— 将来给任一侧加字段，
+		// 这里会立刻编译失败，而不是静默漏传一个字段。
+		// （staticcheck S1016 也正是要求这么写。）
+		e := EffectiveUpstream(u)
 		switch u.Protocol {
 		case "openai":
 			openai = e

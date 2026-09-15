@@ -47,9 +47,13 @@ type Simulator interface {
 // Generator 仿真生成器。sessionKey 为空时随机生成（进程内恒定）。
 type Generator struct {
 	sessionKey []byte
-	// Cfg 控制哪些中文实体启用仿真。
-	Cfg SimulateZHConfig
-	// mu 保护 Cfg.Dictionary 的热加载：面板 PUT 与在途请求会并发读写。
+	// cfg 控制哪些中文实体启用仿真。
+	//
+	// 刻意不导出：它是本类型里唯一会被热加载改写的状态（SetDictionary / 面板 PUT），
+	// 而导出字段挡不住调用方绕过 mu 直读——那正是 DATA RACE 的来源（见 enabled 的注释）。
+	// 全部访问必须走 SetSimulateConfig / Dictionary / dictLookup / enabled。
+	cfg SimulateZHConfig
+	// mu 保护 cfg 的**全部字段**（四个开关 + Dictionary）：面板 PUT 与在途请求会并发读写。
 	mu sync.RWMutex
 }
 
@@ -59,7 +63,7 @@ func New(sessionKey []byte) *Generator {
 		sessionKey = make([]byte, 32)
 		_, _ = rand.Read(sessionKey)
 	}
-	return &Generator{sessionKey: sessionKey, Cfg: SimulateZHConfig{
+	return &Generator{sessionKey: sessionKey, cfg: SimulateZHConfig{
 		PersonName: true, Phone: true, IDCard: true, BankCard: true,
 	}}
 }
@@ -70,22 +74,50 @@ func New(sessionKey []byte) *Generator {
 // 增量合并会让「删掉一条」无法表达。
 func (g *Generator) SetDictionary(d map[string]map[string]string) {
 	g.mu.Lock()
-	g.Cfg.Dictionary = cloneDict(d)
+	g.cfg.Dictionary = cloneDict(d)
 	g.mu.Unlock()
+}
+
+// SetSimulateConfig 整体设置仿真开关（线程安全）。
+//
+// 仅在构造期由 replacer.New 调用；运行期的开关热加载不在本期范围内。
+func (g *Generator) SetSimulateConfig(c SimulateZHConfig) {
+	g.mu.Lock()
+	g.cfg = c
+	g.mu.Unlock()
+}
+
+// enabled 在锁内评估某个类型的开关（on 为 nil 表示该类型恒开）。
+//
+// 为什么必须把整个结构体在锁内取出来：on 的签名是 func(SimulateZHConfig) bool，
+// 传参意味着**整体拷贝** SimulateZHConfig —— 拷贝动作会读到 Dictionary 这个 map 头，
+// 而 Dictionary 正是 SetDictionary 在锁内改写的字段。锁外传 g.cfg 就会构成
+// 「读 map 头 vs 写 map 头」的真实竞态，go test -race 直接报 DATA RACE。
+// （历史教训：开关判断一度写成 `g.Cfg.PersonName`，只读 struct 偏移 0 的 bool，
+//
+//	误打误撞避开了偏移 8 的 map 头，于是竞态被掩盖；改成表驱动把整结构体传进 on
+//	后立刻在 CI 上暴露出来——见 Specs/06 的 B-19。）
+func (g *Generator) enabled(on func(SimulateZHConfig) bool) bool {
+	if on == nil {
+		return true
+	}
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	return on(g.cfg)
 }
 
 // Dictionary 返回当前词典的深拷贝（线程安全），调用方可放心改。
 func (g *Generator) Dictionary() map[string]map[string]string {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	return cloneDict(g.Cfg.Dictionary)
+	return cloneDict(g.cfg.Dictionary)
 }
 
 // dictLookup 在锁内查词典。
 func (g *Generator) dictLookup(entityType, value string) (string, bool) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	fake, ok := g.Cfg.Dictionary[entityType][value]
+	fake, ok := g.cfg.Dictionary[entityType][value]
 	return fake, ok
 }
 
@@ -170,7 +202,7 @@ func (g *Generator) Fake(entityType string, value []byte, sessionKey []byte) ([]
 		if e.typ != entityType {
 			continue
 		}
-		if e.on != nil && !e.on(g.Cfg) {
+		if !g.enabled(e.on) {
 			return nil, ErrNoSimulation
 		}
 		return []byte(e.gen(g, string(value), key)), nil
@@ -239,7 +271,7 @@ func (g *Generator) fakeIDCard(v string, key []byte) string {
 
 	year := 1950 + r.Intn(70) // 1950..2019
 	month := 1 + r.Intn(12)
-	day := 1 + r.Intn(28) // 固定 ≤28，避免月末边界
+	day := 1 + r.Intn(28)  // 固定 ≤28，避免月末边界
 	seq := 1 + r.Intn(998) // 避开 000/999
 	body := province + city + district +
 		strconv.Itoa(year) +

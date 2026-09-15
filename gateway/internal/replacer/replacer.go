@@ -70,25 +70,38 @@ type Config struct {
 
 // impl 默认实现。
 type impl struct {
-	mu   sync.Mutex // 保护 cfg.Strategy 热加载
-	cfg  Config
-	sim  *simulator.Generator
+	// mu 保护 cfg 整块的热加载（含 Strategy 与 Simulate——后者内嵌 map 头，
+	// 锁外按值拷贝整个结构体同样会与 SetStrategy 的写入竞争）。
+	mu    sync.RWMutex
+	cfg   Config
+	sim   *simulator.Generator
 	vault vault.Vault
 }
 
 // New 构造替换器。
 func New(cfg Config, v vault.Vault) Replacer {
 	g := simulator.New(cfg.SessionKey)
-	g.Cfg = cfg.Simulate
+	g.SetSimulateConfig(cfg.Simulate)
 	return &impl{cfg: cfg, sim: g, vault: v}
 }
 
-// Strategy 返回当前替换策略。
-func (r *impl) Strategy() string {
-	if r.cfg.Strategy == "" {
+// normalizeStrategy 空策略等价 placeholder（契约 §5.2 默认值）。
+func normalizeStrategy(s string) string {
+	if s == "" {
 		return "placeholder"
 	}
-	return r.cfg.Strategy
+	return s
+}
+
+// Strategy 返回当前替换策略。
+//
+// 必须在锁内读：SetStrategy 会并发改写 r.cfg.Strategy（面板 PUT），
+// 而本方法是**每个请求**都会调的（proxy.strategy()），锁外读字符串头是真实竞态。
+func (r *impl) Strategy() string {
+	r.mu.RLock()
+	s := r.cfg.Strategy
+	r.mu.RUnlock()
+	return normalizeStrategy(s)
 }
 
 // SetStrategy 热加载替换策略（线程安全）。仅允许 placeholder / simulate / bypass / 空（=placeholder）。
@@ -130,12 +143,21 @@ func (r *impl) Replace(ctx context.Context, req *ReplaceRequest) (*ReplaceResult
 }
 
 // NewSession 构造一次请求内的替换会话（共享占位符计数与 (type,value) 复用）。
+//
+// r.cfg 在锁内整体快照：它含 Simulate（内嵌 map 头）与 Strategy 两个会热加载的字段，
+// 锁外拷贝整个结构体会与 SetStrategy 的写入竞争。
+//
+// 注意：不要在持锁期间调 r.Strategy() —— RWMutex 的 RLock 不可重入，
+// 若有写者排在两次 RLock 之间会死锁。这里改成先在锁内取快照，再在锁外归一化策略。
 func (r *impl) NewSession() *Session {
+	r.mu.RLock()
+	cfg := r.cfg
+	r.mu.RUnlock()
 	return &Session{
-		cfg:          r.cfg,
+		cfg:          cfg,
 		sim:          r.sim,
 		vault:        r.vault,
-		strategy:     r.Strategy(),
+		strategy:     normalizeStrategy(cfg.Strategy),
 		typeCounters: map[string]int{},
 		valueIndex:   map[string]int{},
 	}

@@ -28,6 +28,12 @@ env:
 #   动机：此前 L2 载体守门与真对抗语料**从未在 CI 里跑过**，
 #   「一个不跑的守门等价于没有守门」——L2 的 30 条 regression 就是这样长期被忽略的。
 #   详见 Specs/06 的 B-15 / B-16 / B-18。
+#
+# ✅ 2026-09-15 追加：verify 的失败必须自述。
+#   go test 输出 tee 到文件，失败时由 scripts/ci-test-annotate.py 把失败用例名 /
+#   DATA RACE 摘要写成 check run 注解。动机：job 日志只对 admin 可见（REST 返回
+#   403），外部排查时只能看到 "exit code 1" —— 一个说不出所以然的守门同样等于没有守门。
+#   详见 Specs/06 的 B-19。
 
 jobs:
   verify:
@@ -57,7 +63,20 @@ jobs:
 
       - name: 单元 + 集成测试（含竞态检测）
         working-directory: gateway
-        run: go test -count=1 -race ./...
+        run: |
+          # tee 仅为了留下日志给下一步生成注解；set -o pipefail 保证 go test 的
+          # 退出码仍是本步骤的退出码，门禁语义不变。
+          set -o pipefail
+          go test -count=1 -race ./... 2>&1 | tee "${RUNNER_TEMP}/go-test.log"
+
+      - name: 测试失败摘要（写回 check run 注解）
+        # 为什么要这一步：job 日志只对仓库 admin 可见（REST 取日志 403
+        # "Must have admin rights"），没有日志权限的人只能看到
+        # "Process completed with exit code 1." —— 红灯说不出所以然。
+        # 注解不依赖日志权限，失败用例名 / 竞态摘要会直接出现在 Checks 面板。
+        # 恒不改变构建结论：本步骤只报告，判定失败由上面那一步负责。
+        if: failure()
+        run: python3 "${GITHUB_WORKSPACE}/scripts/ci-test-annotate.py" "${RUNNER_TEMP}/go-test.log"
 
   build:
     name: build binaries

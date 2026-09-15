@@ -1,9 +1,10 @@
 # LLMate Gate 实现规格（AS-BUILT）
 
-> **文档版本**：v1.2（2026-09-15）
+> **文档版本**：v1.3（2026-09-15）
 > **层级**：L2-AsBuilt（实现现状规格）
 > **取证基线**：`origin/main @ 8bb0dbb`（v1.0 取证于 `c64f246`；v1.1 增补第 6 批缺陷修复；
-> v1.2 增补 §9.1 的 `bench-gate` 守门与子模块锚点约定）
+> v1.2 增补 §9.1 的 `bench-gate` 守门与子模块锚点约定；
+> v1.3 增补 §5.2 的热加载并发约定与 §9.1 的 CI 失败自述）
 > **取证方法**：全量 `git log`（92 commit）+ 逐包读源码 + 本机实际编译运行验证。
 > **核心规则**：**本文档以代码为唯一事实来源。** 任何与 `HANDOFF.md` / `Specs/00` 冲突之处，以本文档为准；本文档与代码冲突时，以代码为准并回来更新本文档。
 > **不回答的问题**：为什么这样设计（见 `Specs/00`）、原始排期（见 `Specs/01`）。
@@ -438,6 +439,21 @@ Merkle 的用途是**多轮对话只扫新增 turn**：请求体里 `messages` �
 
 词典查表优先：`dictLookup(entityType, value)` 命中即用用户指定值，未命中回落 HMAC 派生。
 
+**并发约定（新增，v1.3）**：`Generator` 的开关与词典是本类型里**唯一会被热加载改写**的状态
+（`SetDictionary` 由面板 PUT 触发），因此定下三条硬约束：
+
+1. `cfg` 字段**不导出**。导出字段挡不住调用方绕过 `mu` 直读；不导出让**编译器**成为护栏——
+   比加测试更可靠，因为测试只能覆盖想到的路径。
+2. 所有访问只走 `SetSimulateConfig` / `SetDictionary` / `Dictionary` / `dictLookup` / `enabled`。
+3. `enabled(on func(SimulateZHConfig) bool)` **在 `RLock` 内**求值。**不要**在锁外写 `on(g.cfg)`：
+   按值传参会**整体拷贝** `SimulateZHConfig`（含 `Dictionary` 的 map 头），与 `SetDictionary`
+   的写入构成真实数据竞态（B-19，CI `-race` 上暴露）。`on == nil` 表示该类型恒开。
+
+同类约定适用于 `replacer.impl`：`Strategy()`（**每个请求**都走的热路径，`proxy.strategy()`）
+与 `NewSession()` 都在锁内快照 `r.cfg`。注意 `RLock` **不可重入**——
+写者排在两次 `RLock` 之间会死锁，故 `NewSession` 先取快照、再在锁外归一化策略，
+而不是持锁调 `r.Strategy()`。
+
 ### 5.3 Vault
 
 `vault.MemVault`：AES-256-GCM 加密 + scrypt 派生 + TTL 清扫（每分钟）+ `persist` 控制是否落盘。`Delete` 会先 **zeroize** 密钥材料。密钥随机生成不落盘（进程重启即失效，`persist=false` 时映射表也不留）。
@@ -545,7 +561,7 @@ sample_text
 
 | job | 内容 |
 |---|---|
-| `verify` | vet + `go test -race` |
+| `verify` | vet + `go test -race`；失败时把失败用例写回 check run 注解 |
 | `build` | 交叉编译冒烟 |
 | `e2e` | E1-E8（契约级） |
 | `ui-smoke` | D1-D6（面板） |
@@ -565,6 +581,15 @@ sample_text
 **子模块**：`bench/` 指向 `cn-pii-bench`，`.gitmodules` 声明 `branch = main`。
 CI 用 `submodules: true` 按**父仓记录的 SHA** 检出（不受 `branch` 影响），
 所以每次改动 bench 侧脚本或语料后，**必须同步更新父仓的锚点**，否则 CI 测的还是旧数据。
+
+**`verify` 的失败必须自述（v1.3）**：Actions 的 job 日志 REST 接口要求 admin 权限
+（公开仓库同样返回 `403 Must have admin rights to Repository`），没有该权限的人
+只能看到一句「Process completed with exit code 1.」。因此 `go test` 的输出 tee 到文件，
+失败时由 `scripts/ci-test-annotate.py` 把 `--- FAIL` / `FAIL <pkg>` / `DATA RACE`
+写成 `::error::` 注解——**注解不依赖日志权限**。该步骤不改变构建结论
+（判定失败仍由 `go test` 那一步负责，`set -o pipefail` 保证退出码不被 `tee` 吞掉）。
+这条改动是 B-19 排查代价的直接产物：本机 `-race` 不可用（见 §12.2），
+竞态缺陷只能靠 CI 反馈，那么「CI 能不能说清楚为什么红」就是能力问题而非体验问题。
 
 Go 版本：`GO_VERSION: '1.25.13'`（CI 权威口径；`gateway/go.mod` 声明 `go 1.24`）。
 
@@ -734,13 +759,14 @@ python3 bench_runner_adversarial.py --endpoint http://127.0.0.1:8413/v1/privacy/
 | P2-7 | `Handle` 重复 `io.ReadAll` 同一 body（拆出 `HandleWithBody`） | 🟢 低 | ✅ 已修 |
 | P2-8 | 「可仿真类型」清单在 `config`/`simulator` 两处各写一份，会漂移 | 🟢 低 | ✅ 已修（`simulator.simulatable` 为唯一权威表） |
 | P2-9 | 上游合并语义在启动建路由与配置打印两处各写一份 | 🟢 低 | ✅ 已修（`config.EffectiveUpstreams()` 单一实现） |
+| **B-19** | **表驱动重构把「读一个 bool」变成「按值拷贝整个 `SimulateZHConfig`」（含 `Dictionary` 的 map 头）→ 与 `SetDictionary` 的写入构成数据竞态，CI `verify` 的 `-race` 红灯**；连带 `replacer.Strategy()` / `NewSession()` 也在锁外读 `r.cfg` | 🔴 高 | ✅ 已修（`cfg` 不导出 + `enabled()` 锁内求值 + `Strategy()`/`NewSession()` 锁内快照，见 §5.2） |
 
 ### 12.2 未修 / 明确不做
 
 | # | 项 | 类型 | 说明 |
 |---|---|---|---|
 | P2-14 | SSE 帧外的不完整哨兵字节不计入 orphan | ⏸ **已接受** | `SSERestorer` 只解析 `data:` 行，被切在帧边界之外的裸字节不进入 trie 缓冲，因此不计数。这是**刻意选择**：帧外的字节本就不该做还原（不是 JSON 值），计入反而产生噪声告警。保留观察，不修 |
-| — | `go test -race` 在本容器不可用 | 环境限制 | `FATAL: ThreadSanitizer: unsupported VMA range (Found 39 - Supported 48)`，非代码问题。本机以 `go test ./...` + `go vet ./...` 替代；CI 的 `verify` job 覆盖 `-race` |
+| — | `go test -race` 在本容器不可用 | 环境限制 | `FATAL: ThreadSanitizer: unsupported VMA range (Found 39 - Supported 48)`，非代码问题。本机以 `go test ./...` + `go vet ./...` 替代；CI 的 `verify` job 覆盖 `-race`。**代价是竞态缺陷只能靠 CI 反馈**，故 CI 的失败必须自述（见 §9.1 与 Specs/06 B-19） |
 | — | `pii-engineer` sidecar 为 mock | 能力缺口 | 客户端已就绪，无真实 NER 服务 |
 
 ### 12.3 已声明的能力边界（**非缺陷**）
@@ -757,7 +783,7 @@ python3 bench_runner_adversarial.py --endpoint http://127.0.0.1:8413/v1/privacy/
 
 | 项 | `HANDOFF.md`（旧） | 代码实际 |
 |---|---|---|
-| HEAD | `17f4609` | `8bb0dbb`（本文档更新时） |
+| HEAD | `17f4609` | `8bb0dbb`（本次审阅取证基线）；其上叠加 B-19 的并发修复 |
 | Go 版本 | 1.24.5 | CI `1.25.13`，go.mod `1.24` |
 | dev loop 路径 | WSL 9P (`//wsl.localhost/...`) + Windows NTFS scratch | 原生 Linux 直接仓内构建；WSL 描述已不适用 |
 | 功能覆盖 | 停在 09-12（无 registry / 词典 / 身份卡 / 多上游 / bypass） | 这些均已实现并接线 |

@@ -2,7 +2,6 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -73,12 +72,14 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/v1/privacy/restore", s.proxy.PrivacyRestore)
 }
 
-// handleLLM 包装 LLM 端点：先读 body 判定 stream，再交由 proxy 处理。
+// handleLLM 包装 LLM 端点：先读 body 判定 stream，再把同一份 body 交给 proxy。
+//
+// 注意不要在这里把 body 重新包成 io.NopCloser 再让 proxy 读第二遍 —— 那会让每个
+// 请求的 body 在内存里被完整拷贝两次。body 直接以切片形式传下去。
 func (s *Server) handleLLM(endpoint string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		stream, body := detectStream(r)
-		r.Body = io.NopCloser(bytes.NewReader(body))
-		s.proxy.Handle(w, r, endpoint, stream)
+		s.proxy.HandleWithBody(w, r, endpoint, stream, body)
 	}
 }
 

@@ -1,8 +1,8 @@
 # LLMate Gate 实现规格（AS-BUILT）
 
-> **文档版本**：v1.0（2026-09-15）
+> **文档版本**：v1.1（2026-09-15）
 > **层级**：L2-AsBuilt（实现现状规格）
-> **取证基线**：`origin/main @ c64f246`，工作树干净
+> **取证基线**：`origin/main @ 185f159`（v1.0 取证于 `c64f246`；v1.1 增补第 6 批缺陷修复）
 > **取证方法**：全量 `git log`（92 commit）+ 逐包读源码 + 本机实际编译运行验证。
 > **核心规则**：**本文档以代码为唯一事实来源。** 任何与 `HANDOFF.md` / `Specs/00` 冲突之处，以本文档为准；本文档与代码冲突时，以代码为准并回来更新本文档。
 > **不回答的问题**：为什么这样设计（见 `Specs/00`）、原始排期（见 `Specs/01`）。
@@ -248,6 +248,7 @@ audit:
 
 | 规则 | 理由 |
 |---|---|
+| **YAML 严格解析（`yaml.KnownFields(true)`）** | 未知键直接报错而非静默忽略。这是「配置写错但服务照常起来」这类事故的唯一根治手段：`install.sh` 早期版本生成的 config.yaml 顶层写了 `upstream`/`detector`/`replacer` 三个**不存在的键**，服务仍能启动并**全量透传**（脱敏静默失效）——严格模式让这类错误在启动期就崩掉 |
 | `gateway.upstream` 非空、`listen` 以 `:` 开头 | 基础可用性 |
 | `upstreams[].protocol ∈ {openai, anthropic}`、`base_url` 非空 | 防止静默走错上游 |
 | `strategy ∈ {placeholder, simulate, bypass}` | 拼写错误直接拦 |
@@ -261,6 +262,12 @@ audit:
 | 身份卡展开后再做上述唯一性校验 | 手写词典与身份卡撞车同样在启动期拦下 |
 
 > **为什么仿真值要全局唯一**：响应侧还原表是 `map[哨兵串]原值` 一张**平表**，不分类型分桶（`replacer.EntryPairs`）。两个真实值即使类型不同，只要共用一个仿真值，在还原表里就是同键互相覆盖——其中一个永久还原不回来，还会被错认成另一个。这是静默数据损坏，必须在入口拦下（`config.go:382-414`）。
+
+#### 「默认上游 + 同协议覆盖」的合并语义（`EffectiveUpstreams()`）
+
+`gateway.upstream` 是**默认上游**；`upstreams[]` 里同协议的条目**覆盖**该协议的默认上游，未覆盖的协议回落到默认。合并逻辑只有一份实现——`config.EffectiveUpstreams()`，启动期建路由（`cmd/llmate-gate/main.go`）与配置打印（`config.String()`）**共用它**，避免「打印出来的配置」和「实际生效的路由」两套算法漂移。
+
+`EffectiveUpstream.String()` 对 api_key **只输出 `key=set` / `key=none(passthrough)`**，从不回显明文——日志与面板都可能被外传。
 
 ### 3.3 身份卡（`identity_card`）的语义
 
@@ -311,12 +318,36 @@ audit:
 | `reURL` | URL | 结尾不允许句尾标点 |
 | `reUSSSN` | 美国 SSN | 形态 + `global.ValidUSSSN` 二次过滤 |
 | `reAPIKey` / `reJWT` / `reSecretKV` | 密钥类 | 不可逆处理 |
-| `reNameCtx` / `reNameTile` | 中文人名 | **弱格式实体：只做高精度低召回** —— 必须有强上下文引导词（我叫/姓名/联系人…）或称谓后缀（先生/女士…） |
+| `reNameCtx` / `reNameTile` | 中文人名 | **弱格式实体：只做高精度低召回** —— 必须有强上下文引导词（我叫/姓名/联系人…）或称谓后缀（先生/女士…）；捕获后经 `trimNameParticle` 修边（见下） |
 | `reAddress` | 中文地址 | 必须命中行政区划链：省/自治区 **或直辖市** → 市/区/县 → 路/街/巷 → 门牌 |
 
 RE2 不支持 lookaround，数字边界用手工邻字符检查替代（`hasDigitNeighbor` / `hasIDNeighbor`）。
 
-> **正则引擎的能力边界（重要）**：人名与地址在 regex 引擎下**只保证精确率，不保证召回率**。源码注释直接写明：「完整召回依赖 `detection.engine=pii-engineer` 的 NER 模型」。这是 §12 已知缺陷里 `zh_person_name` / `zh_address` 真对抗 F1=0 的根因，不是 bug，是**已声明的设计边界**。
+#### 4.3.1 去重键必须是**区间**，不能是**值**（安全约束）
+
+`scanPersonName` / `scanPlateEN` 内部对同一条规则的多次命中做去重，去重键是 `span{start,end}`——**绝不能改成按 PII 值去重**。
+
+原因：一段文本里同一个 PII 值可以合法地出现多次（「我叫李杰琪，联系人李杰琪。」）。按值去重会**只上报第一次**，后续出现的明文就**原样发给上游**，且在审计/指标里完全无痕。这是真实可复现的 PII 泄漏，早期版本正是这么写的（见 §12 与 `Specs/06` P0-12）。
+
+区间重叠的**跨规则**消解不在这里做，统一交给下游 `replacer.sanitizeEntities`（按区间排序，重叠时保留更长者）。
+
+#### 4.3.2 人名修边 `trimNameParticle`
+
+`([一-龥]{2,4})` 是贪婪捕获，会把紧跟人名的结构助词/动词一起吞进来（`员工张三的身份证号是…` → `张三的身`，污染精确率）。捕获后按下表修边：
+
+| 捕获长度 | 判定 | 结果 |
+|---|---|---|
+| 4 | 前两字在 `commonSurnames`（含 21 个复姓：欧阳/司马/上官/诸葛/尉迟/令狐/呼延…） | 判为复姓四字名，**原样保留** |
+| 4 | 第 3 字是硬性助词（不在 `commonSurnames`） | 截到前 2 字 |
+| 4 | 其它 | 截到前 3 字 |
+| 3 | 第 3 字是硬性助词 | 截到前 2 字 |
+| 3 | 其它 | 原样保留 |
+
+**`nameParticles` 只收硬性助词（的/了/是/在/把/被/与/及/为/以/之…），刻意排除「和/有/会/能/要」**——这些字可以合法地是人名的末字（李永和、张有、陈会）。把它们放进助词集会把人名截断（`李永和` → `李永`），比多吞一个字更糟。残留：两字人名后紧跟和/有/会/能/要 时仍会多吞一字，归入 NER 才能根治的已知边界（§12）。
+
+> **能力边界**：人名与地址在 regex 引擎下**只保证精确率，不保证召回率**。源码注释直接写明：「完整召回依赖 `detection.engine=pii-engineer` 的 NER 模型」。修边只治「多吞字」（精确率），治不了「没上下文引导词就完全不召回」（召回率）。
+
+> **这条边界在实测里的样子**：真对抗语料 §10.1 中 `person_name` / `address` 两个 subset 的 F1 仍是 0（引导词缺失、无省级前缀的就完全不召回），而 `phone` / `email` / `ip_address` / `id_card_masked` 全部 1.0。不是 bug，是**已声明的设计边界**——regex 引擎不承诺弱格式实体的召回。
 
 ### 4.4 登记表（`registry`）
 
@@ -416,7 +447,9 @@ Merkle 的用途是**多轮对话只扫新增 turn**：请求体里 `messages` �
 
 `SSERestorer` 在其上再包一层：按 SSE 事件解析，只对 `data:` 行的 JSON 字符串值做还原，保留非 data 行、保留数字类型不动（`TestSSERestorer_PreservesNumbers` / `_NonTextKeysUntouched`）。
 
-残留不完整占位符计入 `llmate_stream_orphan_placeholders_total`。
+残留不完整占位符（流结束时仍在缓冲里、拼不成完整哨兵的字节）**每个还原实例自己记一份**（`StreamRestorer.orphans`，`Close()` 时 +1），代理层用 `restorer.Orphans()` 的**本请求增量**打点。
+
+> **为什么不能直接采样全局值**：`StreamOrphanTotal` 是进程级累计，Prometheus 的 `.Add()` 语义是「累加增量」。若直接用全局累计值当增量上报（早期实现即如此），单请求计数会变成「进程启动至今」的雪球，且并发请求互相污染——该指标实际上退化成不可用的死指标。全局累计只适合直接 `promhttp` 暴露，不适合参与请求级打点。
 
 ---
 
@@ -435,7 +468,9 @@ Merkle 的用途是**多轮对话只扫新增 turn**：请求体里 `messages` �
 
 ### 6.2 tool_call 扫描
 
-`policy.tool_call_scan` 控制。递归遍历请求体，对 `tool_calls` 的 `arguments` 逐个值做检测替换；支持嵌套结构；**JSON 字符串里内嵌的 PII 也会被处理**（`transform` / `anonymizeJSONString`，`proxy.go:306-401`）。
+`policy.tool_call_scan` 控制。递归遍历请求体，对 `tool_calls` 的 `arguments` 逐个值做检测替换；支持嵌套结构；**JSON 字符串里内嵌的 PII 也会被处理**（`transform` / `anonymizeJSONString`，`proxy.go:317-411`）。
+
+> 同一段文本出现在**同一请求的多个字段**时，每个字段都必须独立脱敏——不能因为「这个值我已经替换过了」就跳过。L2 泄漏级对等性测试（§10.3 的 `tool_call_nested` 载体）正是用这个场景做探针的。
 
 有一个已修复的坑值得留档（`07481b0`）：`tool_call.arguments` 脱敏后必须**仍是 JSON 字符串**，不能变成对象——否则上游 API 直接报 400。
 
@@ -474,6 +509,13 @@ sample_text
 
 延迟类指标**单位统一为秒**（Prometheus 惯例）。指标名属公共接口，改名会破坏已对接的 Grafana/告警，故冻结。
 
+打点口径的两条硬约定：
+
+| 约定 | 说明 |
+|---|---|
+| **请求级指标必须用「本请求增量」，不得用全局累计值** | `llmate_stream_orphan_placeholders_total` 是典型：源码层维护 process-global 累计 + 每实例计数两套，代理层只取实例值（`restorer.Orphans()`）打点。回归测试 `TestProxy_StreamOrphanMetric` / `TestProxy_BufferedOrphanMetric` 断言指标值**恰好为 1.0**（而非 ≥1），用于钉死这一点 |
+| 面板/配置打印不回显密钥 | `config.String()` 对 api_key 只输出 `key=set` / `key=none(passthrough)` |
+
 ### 7.3 调试面板
 
 `/_debug`，4 个 Tab：流量 / Playground / 规则 / 审计。
@@ -489,7 +531,7 @@ sample_text
 | MCP | `cmd/mcp-server` | 3 个工具：`anonymize`（脱敏+返回 request_id）、`deanonymize`（按 id 还原）、`scan_tool_params`（预检式扫描：是否含 PII + 脱敏样例） |
 | Claude Code hooks | `hooks/lmgate_hook.py` + `pre-tool.sh` / `post-tool.sh` | pre-tool 调 `/v1/privacy/redact` 做递归脱敏与 PII 告警 |
 | VS Code 扩展 | `vscode-ext/` | 命令 `llmateGate.enable` / `disable` / `openDashboard`；可自动拉起网关进程；未找到 binary 时给出明确提示 |
-| Linux/macOS 安装 | `scripts/install.sh` | 装 `~/.local/bin`，注册 systemd --user / launchd |
+| Linux/macOS 安装 | `scripts/install.sh` | 装 `~/.local/bin`，注册 systemd --user / launchd。支持 `--binary` / `--port` / `--no-autostart` / `--dry-run` / `--uninstall`；binary 路径按 `uname -m` 推导架构（**不写死**） |
 | Windows 安装 | `scripts/install.ps1` | 装 `%LOCALAPPDATA%\Programs`，注册计划任务 + 桌面快捷方式 |
 | 包管理 | `scoop-bucket/llmate-gate.json` | Windows amd64 + arm64 双入口 |
 | 发布 | `.github/workflows/release.yml` | tag `v*.*.*` 触发 → 6 平台交叉编译 → 建 Release + 上传产物；支持 `workflow_dispatch` 手动重发 |
@@ -510,34 +552,95 @@ Go 版本：`GO_VERSION: '1.25.13'`（CI 权威口径；`gateway/go.mod` 声明 
 - `e2e/ui_smoke.sh`：256 行，断言 D1-D6（面板）
 - `e2e/latency.sh` + `latency_client.py`：多轮 P99 基准（纯标准库）
 
+### 9.3 本地回归三件套（跨仓，改动检测层后必跑）
+
+CI 只跑仓内 fixture 校验；**真实指标回归在姊妹仓 `cn-pii-bench`**，因为需要「起网关 + 打真实流量」：
+
+```bash
+# 1) 单元/契约
+cd gateway && go test ./... -count=1 && go vet ./...
+
+# 2) 语料自检（重复即硬错，防止「换数字灌水」把指标做虚）
+cd ../cn-pii-bench && python3 validate.py --all
+
+# 3) 三口径实测（需网关在 :8413 运行）
+python3 runner.py --endpoint http://127.0.0.1:8413 --cases fixtures/cases.jsonl
+python3 runner.py --endpoint http://127.0.0.1:8413 --cases fixtures/cases_en.jsonl
+python3 bench_runner_adversarial.py --endpoint http://127.0.0.1:8413
+python3 carriers.py --base-url http://127.0.0.1:8413      # 不带 --limit，跑全量
+```
+
+> **不要加 `--limit`。** 子集采样会整类地掩盖缺陷：`--limit 60` 恰好只取到
+> `person_name` + `phone`，银行卡一条不进样本（`Specs/06` B-16）。
+
+判读顺序：**先看 L2 载体 regression 是否为 0**（泄漏级，最敏感，能抓到 span 级指标看不见的泄漏），再看真对抗 P/F1，最后才看合成语料（自作者语料 F1=1.0 只说明「检测器与生成器口径一致」，不构成结论）。
+
+> 本容器无法跑 `-race`（ThreadSanitizer 不可用，见 §12.2），以 `go test` + `go vet` 替代；CI 覆盖 `-race`。
+
 ---
 
-## 10. 实测数据（本机实跑，2026-09-15）
+## 10. 实测数据（本机实跑，2026-09-15 20:40）
 
-本机（原生 Linux / arm64，Go 1.25.13）编译并运行网关后，用 `cn-pii-bench/runner.py` 实跑三个语料：
+本机（原生 Linux / arm64，Go 1.25.13）以**当前 HEAD 源码**用 `go build` 重新编译、
+在独立端口运行网关后，用 `cn-pii-bench/runner.py` / `bench_runner_adversarial.py` / `carriers.py` 实跑：
 
 | 语料 | 条数 | P | R | F1 | TP | FP | FN | p50/p95/p99 |
 |---|---|---|---|---|---|---|---|---|
-| 真对抗 `cases_adversarial.jsonl` | 28 | **0.9565** | **0.6111** | **0.7458** | 22 | 1 | 14 | 0/1/8 ms |
-| 合成中文 `cases.jsonl` | 240 | 1.0000 | 1.0000 | 1.0000 | 360 | 0 | 0 | 0/1/2 ms |
-| 英文基线 `cases_en.jsonl` | 180 | 1.0000 | 1.0000 | 1.0000 | 330 | 0 | 0 | 0/1/4 ms |
+| 真对抗 `cases_adversarial.jsonl`（严格口径） | 28 | **1.0000** | **0.6216** | **0.7667** | 23 | 0 | 14 | 0/1/10 ms |
+| 真对抗（悲观口径，4 条 `expect_miss` 计入 FN） | 28 | 1.0000 | 0.5610 | **0.7188** | 23 | 0 | 18 | — |
+| 合成中文 `cases.jsonl` | 240 | 1.0000 | 1.0000 | 1.0000 | 360 | 0 | 0 | 0/1/4 ms |
+| 英文基线 `cases_en.jsonl` | 180 | 1.0000 | 1.0000 | 1.0000 | 330 | 0 | 0 | 0/1/2 ms |
 
-**真对抗 F1=0.7458 与仓库内报告 `reports/adversarial_20260912-195233.md` 完全一致**，说明该数字可复现、可信。
+**真对抗精确率已从 0.9565 提升到 1.0000**：此前唯一的 1 条误报来自人名贪婪捕获（`张三的身`），由 `trimNameParticle` 修边（§4.3.2 / `Specs/06` P1-13）消除。召回率不变（0.6111 → 0.6216 的微升来自语料去重后重新配平），说明该缺陷是**纯精确率问题**，修的没有副作用。
+
+**语料质量**：三个语料均为 **0 重复组**（28/240/180 条全为唯一正文）。真对抗语料的 21 个独立句法形态（数字归一后）说明它不是「一句话换几个数字」灌水出来的。
 
 ### 10.1 真对抗 by-subset（诚实口径）
 
-| subset | n | P | R | F1 | 结论 |
-|---|---|---|---|---|---|
-| email | 4 | 1.0 | 1.0 | 1.0 | 含 `+` 标签邮箱通过 |
-| ip_address | 2 | 1.0 | 1.0 | 1.0 | 带端口通过 |
-| phone | 9 | 1.0 | 1.0 | 1.0 | emoji 相邻、无分隔符均通过 |
-| mixed | 2 | 1.0 | 0.75 | 0.857 | 人名漏检拖累 |
-| tool_call | 2 | 1.0 | 0.5 | 0.667 | 人名漏检拖累 |
-| **person_name** | 4 | — | 0 | **0** | 无上下文引导词时完全不召回 |
-| **address** | 4 | — | 0 | **0** | 缺省级前缀 / 园区式地址不匹配 |
-| **id_card_masked** | 1 | 0 | 0 | **0** | 掩码形态（`*`）不支持，且误报 1 条 |
+| subset | n | TP | FP | FN | P | R | F1 | 结论 |
+|---|---|---|---|---|---|---|---|---|
+| email | 4 | 4 | 0 | 0 | 1.0 | 1.0 | 1.0 | 含 `+` 标签邮箱通过 |
+| ip_address | 2 | 2 | 0 | 0 | 1.0 | 1.0 | 1.0 | 带端口通过 |
+| phone | 9 | 6 | 0 | 0 | 1.0 | 1.0 | 1.0 | emoji 相邻、无分隔符通过；3 条 `+86-` 形态在 `expect_miss` 中豁免 |
+| **id_card_masked** | 1 | 1 | 0 | 0 | 1.0 | 1.0 | **1.0** | 掩码本身仍是弱点（`expect_miss`），但同句的真名 `张三` 已正确检出——此前该 case 的 `expect: []` 反而把真 PII 判成误报 |
+| mixed | 2 | 6 | 0 | 2 | 1.0 | 0.75 | 0.8571 | 人名漏检拖累 |
+| tool_call | 2 | 4 | 0 | 4 | 1.0 | 0.5 | 0.6667 | 人名漏检拖累 |
+| **person_name** | 4 | 0 | 0 | 4 | — | 0 | **0** | 无上下文引导词时完全不召回（设计边界） |
+| **address** | 4 | 0 | 0 | 4 | — | 0 | **0** | 缺省级前缀 / 园区式地址不匹配（设计边界） |
 
-> **合成语料 F1=1.0 不是对外宣称值。** 在自作者合成语料上自评，F1 高只说明「检测器与生成器对同一套仿真规则达成一致」，不构成真实场景结论（`Specs/03` §4.3.4 已明确）。诚实数字是 0.7458。
+### 10.2 已知弱点台账（`expect_miss`）
+
+语料用 `expect_miss` 显式登记「已知弱点」，与 `expect: []`（确实无 PII）区分开——评估器对被登记的漏报**豁免 FP 计分**，同时保留台账口径，避免「把已知弱点洗成精度」。
+
+当前 4 条，**已恢复 0 / 仍漏报 4**：
+
+| case | 类型 | 值 | 原因 |
+|---|---|---|---|
+| `phone_fmt_adv-004/005/006` | `zh_phone` | `+86-…-…-…` | `known_weakness_unnormalized_phone_format` |
+| `idcard_mask_adv-028` | `zh_id_card` | `110101********8531` | `real_world_masked_id_card` |
+
+严格口径与悲观口径**两个数都报**：0.7667 与 0.7188。只报前者会显得比实际强。
+
+### 10.3 L2 泄漏级载体对等性（`carriers.py`，**全量 240 条**）
+
+口径是**泄漏级**（脱敏后载荷中 PII 原串是否消失），不是检测器 span 级：
+
+| 载体 | 已脱敏 | 泄漏 | 相对 flat 的 regression | 往返通过 |
+|---|---|---|---|---|
+| `flat` | 360 | 0 | — | 240/240 |
+| `multimodal` | 360 | 0 | OK | 240/240 |
+| `tool_call` | 360 | 0 | OK | 240/240 |
+| `tool_call_nested` | 360 | 0 | OK | 240/240 |
+
+✅ **PARITY OK** —— 3 种结构化载体相对 flat 基线 **0 regression**、往返 **240/240**。v1 门禁达标。
+
+另有 **36 条按设计不可逆**（`zh_bank_card` 30 条 + 含银行卡的 `adversarial` 6 条）单列入台账：银行卡在 `strategy=placeholder` 下的命运是 mask（`replacer.go:292-295`，保留后 4 位），本就不可还原，故豁免往返断言。
+
+> **此前的 30 条 regression 不是载体适配问题，而是检测层的值去重缺陷**（§4.3.1 / `Specs/06` P0-12 / B-15）：`tool_call_nested` 的样本把同一段文本同时放进 `user.profile.bio` 和 `tags[0]`，第二处因按值去重而未脱敏，于是被 L2 判为泄漏。修掉去重键后 regression 直接归零——这也说明 L2 泄漏级口径**能捕捉到 span 级指标看不见的缺陷**。
+
+> **掩盖缺陷的采样陷阱**：早期只跑 `--limit 60`（`cases.jsonl` 前 60 条 = `person_name` 30 + `phone` 30），一条银行卡都没进样本，于是「往返 60/60」看起来全绿，实际上整类缺陷不可见。**守门必须跑全量。** 详见 `Specs/06` B-16。
+
+> **合成语料 F1=1.0 不是对外宣称值。** 在自作者合成语料上自评，F1 高只说明「检测器与生成器对同一套仿真规则达成一致」，不构成真实场景结论（`Specs/03` §4.3.4 已明确）。诚实数字是 **0.7667（严格）/ 0.7188（悲观）**。
 
 ---
 
@@ -545,8 +648,8 @@ Go 版本：`GO_VERSION: '1.25.13'`（CI 权威口径；`gateway/go.mod` 声明 
 
 | 能力 | 状态 | 证据 |
 |---|---|---|
-| OpenAI 兼容代理（5 端点） | ✅ 已实现 | `server.go:62-66` |
-| Anthropic 兼容（`/v1/messages`） | ✅ 已实现 | `proxy.go:562-573` |
+| OpenAI 兼容代理（5 端点） | ✅ 已实现 | `server.go:61-65` |
+| Anthropic 兼容（`/v1/messages`） | ✅ 已实现 | `proxy.go:573-589`（`isAnthropicEndpoint` + `targetFor`） |
 | 配置驱动多上游 + 路径前缀 | ✅ 已实现 | `config.go:48-56` |
 | 中文 PII 检测（10 类） | ✅ 已实现 | `detector/regex.go` |
 | 国际 PII 检测（5 类） | ✅ 已实现 | `pkg/global` |
@@ -557,7 +660,7 @@ Go 版本：`GO_VERSION: '1.25.13'`（CI 权威口径；`gateway/go.mod` 声明 
 | 登记表（补召回） | ✅ 已实现 | `addd75b` `d12c810` |
 | bypass 透传策略 | ✅ 已实现 | `b87bfba` |
 | per-type 命运（mask/redact） | ✅ 已实现 | `policy/` |
-| 递归 tool_call 参数扫描 | ✅ 已实现 | `proxy.go:306-401` |
+| 递归 tool_call 参数扫描 | ✅ 已实现 | `proxy.go:317-411`（`transform` + `anonymizeJSONString`） |
 | SSE 跨事件边界还原 | ✅ 已实现 | `replacer/sse.go` |
 | Merkle 增量检测 | ✅ 已实现 | `cache/merkle.go` |
 | 熔断 + fail-closed | ✅ 已实现 | `circuit/` |
@@ -567,8 +670,11 @@ Go 版本：`GO_VERSION: '1.25.13'`（CI 权威口径；`gateway/go.mod` 声明 
 | MCP 3 工具 | ✅ 已实现 | `cmd/mcp-server` |
 | Claude Code hooks | ✅ 已实现 | `hooks/` |
 | VS Code 扩展 | ✅ 已实现 | `vscode-ext/` |
-| Linux 安装脚本 | ⚠️ 真机跑通，但含 4 个缺陷 | 见 §12 |
+| Linux 安装脚本 | ✅ 真机跑通，5 个缺陷已全修 | `Specs/06` P1-1~P1-5；`--dry-run` 不再落盘、`--uninstall` 清理完整、端口一致性已校验 |
 | Windows 安装脚本 | ✅ 已真机冒烟（`0cea49b`） | |
+| **L2 泄漏级载体对等性** | ✅ **PARITY OK（regressions=0，往返 240/240）** | `carriers.py` **全量 240 条** × 4 载体，见 §10.3 |
+| **语料自检（重复/漂移）** | ✅ `validate.py --all`，重复即硬错 | 三语料 0 重复组 |
+| **按设计不可逆显式入账** | ✅ 可逆性实测探测 + 台账 | 36 条银行卡（mask），见 §10.3 |
 | NER 检测（pii-engineer） | ⚠️ 客户端已实现，sidecar 为 mock | `piiengineer.go` 就绪，无真实服务 |
 | Homebrew tap | ❌ 未建 | |
 | issue/PR 模板 | ❌ 未建 | |
@@ -577,25 +683,43 @@ Go 版本：`GO_VERSION: '1.25.13'`（CI 权威口径；`gateway/go.mod` 声明 
 
 ---
 
-## 12. 已知缺陷（本次真机冒烟新发现）
+## 12. 缺陷台账与能力边界
 
-上一版交接包把「Linux/macOS `install.sh` 真机冒烟」列为唯一待办。本次在原生 Linux 上执行后，发现 4 个此前从未暴露的缺陷。详见 `Specs/06-代码审阅-优化点清单.md`。
+本节的**唯一职责**是记录「现在还剩什么没修」。已修项只留一行结论，完整修复记录在 `Specs/06-代码审阅-优化点清单.md`。
 
-摘要：
+### 12.1 已修缺陷（保留结论，便于追溯）
 
-| # | 缺陷 | 严重度 |
-|---|---|---|
-| 1 | `install.sh` / `install.ps1` 生成的 config.yaml **schema 错误**（顶层 `upstream`/`detector`/`replacer` 三个键都不存在） | 🔴 高 |
-| 2 | `config.Load` 未启用严格模式，**未知键被静默忽略**，导致 #1 无法被用户察觉 | 🔴 高 |
-| 3 | `--dry-run` 仍会真实写入 config.yaml（该写操作未走 `run()` 包装） | 🟡 中 |
-| 4 | `--uninstall` 不删 binary/配置；且 `set -e` 下 `systemctl` 一失败就中断 | 🟡 中 |
-| 5 | `--port` 与已存在 config.yaml 不一致时，启动端口 ≠ 健康检查端口 → 假失败 | 🟡 中 |
+| # | 缺陷 | 严重度 | 状态 |
+|---|---|---|---|
+| 1 | `install.sh` / `install.ps1` 生成的 config.yaml **schema 错误**（顶层 `upstream`/`detector`/`replacer` 三个键都不存在） | 🔴 高 | ✅ 已修 |
+| 2 | `config.Load` 未启用严格模式，**未知键被静默忽略**，导致 #1 无法被用户察觉 | 🔴 高 | ✅ 已修（`KnownFields(true)`，见 §3.2） |
+| 3 | `--dry-run` 仍会真实写入 config.yaml（该写操作未走 `run()` 包装） | 🟡 中 | ✅ 已修 |
+| 4 | `--uninstall` 不删 binary/配置；且 `set -e` 下 `systemctl` 一失败就中断 | 🟡 中 | ✅ 已修 |
+| 5 | `--port` 与已存在 config.yaml 不一致时，启动端口 ≠ 健康检查端口 → 假失败 | 🟡 中 | ✅ 已修 |
+| **P1-18** | `install.sh` 的 `guess_binary` 把架构写死（linux→amd64 / darwin→arm64）：arm64 Linux 上必然找不到产物；若 `dist/` 里恰有交叉编译的 amd64 产物则会装上**跑不起来**的二进制 | 🟡 中 | ✅ 已修（按 `uname -m` 推导 goarch + 失败时列出可用产物） |
+| **P0-12** | **`scanPersonName` / `scanPlateEN` 按「值」去重 → 同一段文本里重复出现的 PII 只脱敏第一次，其余明文直发上游，且审计/指标无痕**（真实 PII 泄漏） | 🔴 **高** | ✅ 已修（去重键改为 `span{start,end}`，见 §4.3.1） |
+| **P1-13** | 人名贪婪捕获把结构助词吞入（`员工张三的身份证号是…` → `张三的身`），造成真对抗 1 条误报 | 🟡 中 | ✅ 已修（`trimNameParticle`，见 §4.3.2） |
+| **P1-6** | `llmate_stream_orphan_placeholders_total` 用进程级累计值当请求增量上报 → 雪球式虚高、并发污染，指标实为死指标 | 🟡 中 | ✅ 已修（每实例计数 + 本请求增量打点，见 §5.4 / §7.2） |
+| **B-15** | L2 载体对等性 30 条 regression | 🟡 中 | ✅ 已修（根因即 P0-12；现 regressions=0，见 §10.3） |
+| P2-7 | `Handle` 重复 `io.ReadAll` 同一 body（拆出 `HandleWithBody`） | 🟢 低 | ✅ 已修 |
+| P2-8 | 「可仿真类型」清单在 `config`/`simulator` 两处各写一份，会漂移 | 🟢 低 | ✅ 已修（`simulator.simulatable` 为唯一权威表） |
+| P2-9 | 上游合并语义在启动建路由与配置打印两处各写一份 | 🟢 低 | ✅ 已修（`config.EffectiveUpstreams()` 单一实现） |
 
-其余已知能力边界（**非缺陷，是已声明的设计边界**）：
+### 12.2 未修 / 明确不做
 
-- regex 引擎对人名/地址只保证精确率；完整召回需 NER sidecar
-- 掩码身份证（`110101********8531`）不支持
-- `+86-186-1234-5678` 这类带国际前缀/分隔符的手机号不支持
+| # | 项 | 类型 | 说明 |
+|---|---|---|---|
+| P2-14 | SSE 帧外的不完整哨兵字节不计入 orphan | ⏸ **已接受** | `SSERestorer` 只解析 `data:` 行，被切在帧边界之外的裸字节不进入 trie 缓冲，因此不计数。这是**刻意选择**：帧外的字节本就不该做还原（不是 JSON 值），计入反而产生噪声告警。保留观察，不修 |
+| — | `go test -race` 在本容器不可用 | 环境限制 | `FATAL: ThreadSanitizer: unsupported VMA range (Found 39 - Supported 48)`，非代码问题。本机以 `go test ./...` + `go vet ./...` 替代；CI 的 `verify` job 覆盖 `-race` |
+| — | `pii-engineer` sidecar 为 mock | 能力缺口 | 客户端已就绪，无真实 NER 服务 |
+
+### 12.3 已声明的能力边界（**非缺陷**）
+
+- **regex 引擎对人名/地址只保证精确率，不保证召回率**。完整召回需 `detection.engine=pii-engineer` 的 NER sidecar。实测表现见 §10.1（`person_name` / `address` subset F1=0）。
+- 掩码身份证（`110101********8531`）不支持 —— 已在语料里用 `expect_miss` 登记。
+- `+86-186-1234-5678` 这类带国际前缀/分隔符的手机号不支持 —— 同上，4 条 `expect_miss`。
+- **两字人名后紧跟「和/有/会/能/要」仍会多吞一字**。`trimNameParticle` 刻意不把这些字收进助词集（它们可以合法地是名字末字，如 李永和），代价是这点残留。归入 NER 才能根治的边界。
+- 同一 PII 值在**没有上下文引导词**的位置重复出现时不召回（如 `请转告李杰琪`）—— 召回率边界，与 §4.3.1 的去重缺陷是两件不同的事。
 
 ---
 
@@ -603,12 +727,13 @@ Go 版本：`GO_VERSION: '1.25.13'`（CI 权威口径；`gateway/go.mod` 声明 
 
 | 项 | `HANDOFF.md`（旧） | 代码实际 |
 |---|---|---|
-| HEAD | `17f4609` | `c64f246` |
+| HEAD | `17f4609` | `185f159`（本文档重建时） |
 | Go 版本 | 1.24.5 | CI `1.25.13`，go.mod `1.24` |
 | dev loop 路径 | WSL 9P (`//wsl.localhost/...`) + Windows NTFS scratch | 原生 Linux 直接仓内构建；WSL 描述已不适用 |
 | 功能覆盖 | 停在 09-12（无 registry / 词典 / 身份卡 / 多上游 / bypass） | 这些均已实现并接线 |
-| 任务队列 | 4 项待办 + 已闭环表 | 仅 1 项真机冒烟，且已执行（发现 4 缺陷） |
-| 实测数据 | 合成 F1=1.0 为主 | 真对抗 0.7458 才是诚实口径 |
+| 任务队列 | 4 项待办 + 已闭环表 | 无待办；缺陷台账见 §12 |
+| 实测数据 | 合成 F1=1.0 为主 | 真对抗 0.7667（严格）/ 0.7188（悲观）才是诚实口径 |
+| L2 载体对等性 | 未记载 | 4 载体 0 regression（§10.3） |
 
 ---
 

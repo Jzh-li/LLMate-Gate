@@ -104,17 +104,28 @@ var piiBlockTypes = map[string]bool{
 }
 
 // Handle 通用转发入口；anon 决定如何脱敏请求体。
+// 本方法自行读取请求体，等价于 HandleWithBody(..., body)，保留它让单测与外部
+// 调用方能用最朴素的方式驱动代理。
 func (p *Proxy) Handle(w http.ResponseWriter, r *http.Request, endpoint string, stream bool) {
-	start := time.Now()
-	reqID := requestID(r)
-	convID := conversationID(r, r.Body)
-
 	body, err := io.ReadAll(r.Body)
 	_ = r.Body.Close()
 	if err != nil {
 		writeError(w, gatewayerrors.Wrap(gatewayerrors.CodeInvalidRequest, "read body", err))
 		return
 	}
+	p.HandleWithBody(w, r, endpoint, stream, body)
+}
+
+// HandleWithBody 以「已读出的请求体」驱动转发。
+//
+// server.handleLLM 必须先把 body 读出来才能判定 stream 字段；若这里再 io.ReadAll
+// 一次，同一个请求就要在内存里完整拷贝两遍（大上下文请求下是实打实的开销与 GC 压力）。
+// HandleWithBody 让上层把已读出的切片直接交进来，消除这次重复拷贝。
+func (p *Proxy) HandleWithBody(w http.ResponseWriter, r *http.Request, endpoint string, stream bool, body []byte) {
+	start := time.Now()
+	reqID := requestID(r)
+	convID := conversationID(r)
+
 	rawRequest := string(body)
 	if !p.logPII {
 		rawRequest = redactLog(rawRequest)
@@ -446,6 +457,9 @@ func (p *Proxy) fullResponse(w http.ResponseWriter, resp *http.Response, endpoin
 	restored := string(out) + string(rest)
 	if p.m != nil {
 		p.m.RestoreLatency.WithLabelValues(endpoint).Observe(time.Since(restoreStart).Seconds())
+		if orphan := restorer.Orphans(); orphan > 0 {
+			p.m.StreamOrphans.WithLabelValues(endpoint).Add(float64(orphan))
+		}
 	}
 
 	copyHeaders(w.Header(), resp.Header)
@@ -529,8 +543,10 @@ func (p *Proxy) streamResponse(w http.ResponseWriter, resp *http.Response, endpo
 		flusher.Flush()
 	}
 	if p.m != nil {
-		orphanDelta := replacer.StreamOrphans() // 全局累计，近似计入
-		_ = orphanDelta
+		// 按请求记账：读本还原器（=本请求）的残留数，而不是全局累计量。
+		if orphan := restorer.Orphans(); orphan > 0 {
+			p.m.StreamOrphans.WithLabelValues(endpoint).Add(float64(orphan))
+		}
 		p.m.RequestsTotal.WithLabelValues(endpoint, outcomeOf(resp.StatusCode)).Inc()
 		if resp.StatusCode >= 400 {
 			p.m.UpstreamErrors.WithLabelValues(endpoint, statusLabel(resp.StatusCode)).Inc()
@@ -681,8 +697,11 @@ func requestID(r *http.Request) string {
 	return randHex(16)
 }
 
-// conversationID 优先取 X-Conversation-ID；否则尝试从 body 的 conversation_id 提取。
-func conversationID(r *http.Request, _ io.Reader) string {
+// conversationID 优先取 X-Conversation-ID 头，用于多轮对话的 Merkle 增量检测。
+//
+// 原签名带一个 io.Reader 参数却从未使用（历史遗留的「从 body 里掏 conversation_id」
+// 设想，从未实现）。已删除，避免调用方误以为 body 会被读取。
+func conversationID(r *http.Request) string {
 	if v := r.Header.Get("X-Conversation-ID"); v != "" {
 		return v
 	}

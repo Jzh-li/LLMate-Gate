@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"gateway/internal/simulator"
 	"gateway/pkg/types"
 
 	"github.com/stretchr/testify/require"
@@ -216,7 +217,11 @@ replacement:
 	require.Contains(t, err.Error(), "restore would break")
 }
 
-// TestSimulatableTypes 面板下拉用的类型清单：非空、无重复、与校验集合一致、返回副本。
+// TestSimulatableTypes 面板下拉用的类型清单：非空、无重复、与校验口径一致、返回副本。
+//
+// 注意断言方向：清单的权威来源是 simulator 的能力登记表，config 只是转发。
+// 因此这里检验的是「清单里的每一项都能通过词典校验」（正向），以及「表外类型被
+// 校验拒绝」（反向）——任何一头断裂都说明清单与真实仿真能力脱节了。
 func TestSimulatableTypes(t *testing.T) {
 	got := SimulatableTypes()
 	require.NotEmpty(t, got)
@@ -224,15 +229,22 @@ func TestSimulatableTypes(t *testing.T) {
 	for _, tp := range got {
 		require.False(t, seen[tp], "重复类型 %s", tp)
 		seen[tp] = true
-		require.True(t, simulatableSet[tp], "%s 应在校验集合内", tp)
 		require.NoError(t, ValidateSimulateDictionary(map[string]map[string]string{
 			tp: {"真实值X": "假值Y"},
 		}), "%s 应可通过校验", tp)
 	}
-	require.Len(t, seen, len(simulatableSet), "Types() 与校验集合必须一一对应")
+
+	// 反向：不在清单里的类型必须被拒。zh_plate 有实体类型但无仿真实现。
+	require.Error(t, ValidateSimulateDictionary(map[string]map[string]string{
+		"zh_plate": {"京A12345": "沪B67890"},
+	}), "表外类型必须被校验拒绝")
+
+	// 清单必须与 simulator 的能力登记表逐项对齐（防止有人只改一边）。
+	require.ElementsMatch(t, simulator.SimulatableTypes(), got)
 
 	got[0] = "mutated"
 	require.NotEqual(t, "mutated", SimulatableTypes()[0], "返回的必须是副本")
+	require.NotEqual(t, "mutated", simulator.SimulatableTypes()[0], "simulator 侧同样必须是副本")
 }
 
 // TestExampleConfig_Loads 随仓库发布的示例配置必须能被加载。

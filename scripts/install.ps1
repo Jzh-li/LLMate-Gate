@@ -89,29 +89,33 @@ Log "已安装 → $InstallDir\llmate-gate.exe"
 New-Item -ItemType Directory -Force -Path $DataDir | Out-Null
 
 # 3. 写一个 config 模板（如果还没有）
+# 键名以 Specs/05-实现规格-AS_BUILT.md §3.1 为准。网关以严格模式解析配置：
+# 未知键会导致启动失败，不会静默忽略（否则拼错的键会被无声丢弃）。
 $cfg = Join-Path $DataDir "config.yaml"
 if (-not (Test-Path $cfg)) {
     @"
 # LLMate Gate 配置（最小可用）
 gateway:
   listen: ":${Port}"
+  upstream: "https://api.openai.com"     # 上游 base URL
+  upstream_api_key: ""                   # 必填：上游 LLM 的 API key
   debug: true
-upstream:
-  base_url: "https://api.openai.com"
-  api_key: ""            # 必填：上游 LLM API key
-detector:
+detection:
   engine: "regex"
-replacer:
+replacement:
   strategy: "placeholder"
 "@ | Set-Content -Path $cfg -Encoding UTF8
-    Log "已生成默认配置 → $cfg（请补 api_key）"
+    Log "已生成默认配置 → $cfg"
+    Log "  注意：请填写 gateway.upstream_api_key（上游 API key），否则转发会被上游拒绝"
 }
 
 # 4. 计划任务
 if (-not $NoAutostart) {
     $exe = Join-Path $InstallDir "llmate-gate.exe"
-    $listenArg = if ($Listen -ne "") { "--listen $Listen" } else { "" }
-    $action = New-ScheduledTaskAction -Execute $exe -Argument "--config `"$cfg`" $listenArg"
+    # 默认也显式传 --listen：否则端口由既有配置决定，与本脚本 -Port（快捷方式与
+    # 健康检查都按它走）可能不一致，表现为「装好了但打不开」。
+    $effListen = if ($Listen -ne "") { $Listen } else { ":$Port" }
+    $action = New-ScheduledTaskAction -Execute $exe -Argument "--config `"$cfg`" --listen $effListen"
     $trigger = New-ScheduledTaskTrigger -AtLogOn
     $settings = New-ScheduledTaskSettingsSet `
         -AllowStartIfOnBatteries `
@@ -151,6 +155,6 @@ if (-not $NoAutostart) {
 
 Log "安装完成。"
 Log "  二进制：$InstallDir\llmate-gate.exe"
-Log "  配置：$cfg（请填 upstream.api_key）"
+Log "  配置：$cfg（请填 gateway.upstream_api_key）"
 Log "  调试面板： http://127.0.0.1:$Port/_debug"
 Log "  卸载：   powershell -File scripts\install.ps1 -Uninstall"

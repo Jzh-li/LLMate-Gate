@@ -105,6 +105,53 @@ func cloneDict(d map[string]map[string]string) map[string]map[string]string {
 	return out
 }
 
+// simulatable 仿真能力登记表——**唯一权威来源**。
+//
+// 为什么用表而不是 switch：这张表同时被三处消费——
+//  1. Fake 的派发（本文件）；
+//  2. config.SimulatableTypes()（面板下拉的候选清单）；
+//  3. config.ValidateSimulateDictionary()（词典里出现表外类型即判非法）。
+//
+// 用 switch 时这三处只能靠「记得同步改」维系，而漏改不会编译失败：在 switch 里
+// 加了 case、却忘了补 config 的清单，词典校验就会把合法配置判成非法（面板保存
+// 时用户看到「unknown or non-simulatable entity type」却无从下手）。表驱动让
+// 三者不可能漂移——新增一种仿真只要在这张表里加一行。
+var simulatable = []struct {
+	typ string
+	// on 为 nil 表示该类型无开关、恒开（如邮箱/IP）；否则以 SimulateZHConfig 为准。
+	on  func(SimulateZHConfig) bool
+	gen func(*Generator, string, []byte) string
+}{
+	{types.EntityPersonName, func(c SimulateZHConfig) bool { return c.PersonName }, (*Generator).fakePersonName},
+	{types.EntityPhone, func(c SimulateZHConfig) bool { return c.Phone }, (*Generator).fakePhone},
+	{types.EntityIDCard, func(c SimulateZHConfig) bool { return c.IDCard }, (*Generator).fakeIDCard},
+	{types.EntityBankCard, func(c SimulateZHConfig) bool { return c.BankCard }, (*Generator).fakeBankCard},
+	{types.EntityAddress, nil, (*Generator).fakeAddress},
+	{types.EntityEmail, nil, (*Generator).fakeEmail},
+	{types.EntityIPAddress, nil, (*Generator).fakeIP},
+	{types.EntityDate, nil, (*Generator).fakeDate},
+}
+
+// SimulatableTypes 返回支持仿真的实体类型（副本，顺序稳定）。
+// config.SimulatableTypes() 直接委托到这里，面板下拉消费同一顺序。
+func SimulatableTypes() []string {
+	out := make([]string, 0, len(simulatable))
+	for _, e := range simulatable {
+		out = append(out, e.typ)
+	}
+	return out
+}
+
+// Simulatable 报告该实体类型是否有内置仿真实现。
+func Simulatable(entityType string) bool {
+	for _, e := range simulatable {
+		if e.typ == entityType {
+			return true
+		}
+	}
+	return false
+}
+
 // Fake 生成仿真值（契约 §6.4）。
 func (g *Generator) Fake(entityType string, value []byte, sessionKey []byte) ([]byte, error) {
 	if types.IsIrreversible(entityType) {
@@ -119,38 +166,16 @@ func (g *Generator) Fake(entityType string, value []byte, sessionKey []byte) ([]
 	if len(key) == 0 {
 		key = g.sessionKey
 	}
-	switch entityType {
-	case types.EntityPersonName:
-		if !g.Cfg.PersonName {
+	for _, e := range simulatable {
+		if e.typ != entityType {
+			continue
+		}
+		if e.on != nil && !e.on(g.Cfg) {
 			return nil, ErrNoSimulation
 		}
-		return []byte(g.fakePersonName(string(value), key)), nil
-	case types.EntityPhone:
-		if !g.Cfg.Phone {
-			return nil, ErrNoSimulation
-		}
-		return []byte(g.fakePhone(string(value), key)), nil
-	case types.EntityIDCard:
-		if !g.Cfg.IDCard {
-			return nil, ErrNoSimulation
-		}
-		return []byte(g.fakeIDCard(string(value), key)), nil
-	case types.EntityBankCard:
-		if !g.Cfg.BankCard {
-			return nil, ErrNoSimulation
-		}
-		return []byte(g.fakeBankCard(string(value), key)), nil
-	case types.EntityAddress:
-		return []byte(g.fakeAddress(string(value), key)), nil
-	case types.EntityEmail:
-		return []byte(g.fakeEmail(string(value), key)), nil
-	case types.EntityIPAddress:
-		return []byte(g.fakeIP(string(value), key)), nil
-	case types.EntityDate:
-		return []byte(g.fakeDate(string(value), key)), nil
-	default:
-		return nil, ErrNoSimulation
+		return []byte(e.gen(g, string(value), key)), nil
 	}
+	return nil, ErrNoSimulation
 }
 
 // derive 用 HMAC-SHA256 派生确定性字节流（契约 §6.4 双射保证）。

@@ -8,9 +8,13 @@ import (
 )
 
 // StreamOrphanTotal 流结束时仍未闭合/未匹配的哨兵串累计数（契约 §5.3 metric: stream_orphan_placeholder）。
+//
+// 这是**进程级**累计量，仅用于测试断言与运维粗看；不要把它当成本次请求的增量
+// 写进 Prometheus —— 它与请求无关，并发下会把别的请求的残留算到自己头上。
+// 按请求归属请用 StreamRestorer.Orphans()。
 var StreamOrphanTotal atomic.Int64
 
-// StreamOrphans 返回全局残留占位符累计数，供 /metrics 读取。
+// StreamOrphans 返回全局残留占位符累计数（进程级）。
 func StreamOrphans() int64 { return StreamOrphanTotal.Load() }
 
 // StreamRestorer 流式还原器：接收上游分块（可能是 SSE 原始字节），在缓冲中跨块拼接
@@ -26,7 +30,15 @@ func StreamOrphans() int64 { return StreamOrphanTotal.Load() }
 type StreamRestorer struct {
 	table map[string]string // 哨兵串 → 原值
 	buf   []byte             // 跨块缓冲，仅保留「可能成为哨兵前缀」的尾部
+	orphans int64            // 本还原器（即本请求）累计的残留哨兵数
 }
+
+// Orphans 返回**本还原器**（通常是单个请求）累计的残留哨兵数。
+//
+// 之所以要按实例计数而不是读全局 StreamOrphanTotal：Prometheus 计数器要的是
+// 增量，而全局量是累计值；更关键的是并发流式请求下，全局量会把 A 请求的残留
+// 记到 B 请求的 endpoint 标签上。本方法保证归属精确。
+func (s *StreamRestorer) Orphans() int64 { return s.orphans }
 
 // NewStreamRestorer 基于映射条目构造流式还原器。
 func NewStreamRestorer(entries []entryPair) *StreamRestorer {
@@ -128,6 +140,7 @@ func (s *StreamRestorer) Close() ([]byte, error) {
 		out = append(out, val...)
 	} else if s.isPrefixOfAny(s.buf) {
 		// 残留为某哨兵前缀，无法还原 → 计入 orphan，原样吐出（fail-safe，不丢数据）。
+		s.orphans++
 		StreamOrphanTotal.Add(1)
 		out = append(out, s.buf...)
 	} else {

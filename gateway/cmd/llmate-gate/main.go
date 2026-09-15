@@ -219,26 +219,23 @@ func main() {
 	})
 
 	// 代理：默认 OpenAI 上游 + 可选的协议路由上游（config 驱动各家厂商适配）。
-	up, err := url.Parse(cfg.Gateway.Upstream)
-	if err != nil {
-		log.Fatalf("invalid upstream url: %v", err)
-	}
-	openaiUp := &proxy.Upstream{URL: up, APIKey: cfg.Gateway.UpstreamAPIKey}
-	var anthropicUp *proxy.Upstream
-	for _, u := range cfg.Gateway.Upstreams {
+	//
+	// 合并规则（gateway.upstream 作默认、upstreams[] 同协议覆盖）只在
+	// config.EffectiveUpstreams 里实现一份；启动日志打印的也是同一份结果，
+	// 于是「日志说连哪里」与「实际连哪里」不会再分叉。
+	var openaiUp, anthropicUp *proxy.Upstream
+	for _, u := range cfg.EffectiveUpstreams() {
 		bu, err := url.Parse(u.BaseURL)
 		if err != nil {
-			log.Fatalf("invalid upstreams[].base_url (%s): %v", u.Protocol, err)
+			log.Fatalf("invalid upstream url (%s=%s): %v", u.Protocol, u.BaseURL, err)
 		}
-		target := &proxy.Upstream{URL: bu, APIKey: u.APIKey, APIVersion: u.APIVersion, PathPrefix: u.PathPrefix}
-		switch u.Protocol {
-		case "openai":
-			openaiUp = target
-		case "anthropic":
-			if target.APIVersion == "" {
-				target.APIVersion = "2023-06-01"
-			}
+		target := &proxy.Upstream{
+			URL: bu, APIKey: u.APIKey, APIVersion: u.APIVersion, PathPrefix: u.PathPrefix,
+		}
+		if u.Protocol == "anthropic" {
 			anthropicUp = target
+		} else {
+			openaiUp = target
 		}
 	}
 	px := proxy.New(proc, openaiUp, anthropicUp, m, cfg.Audit.LogPII, merkle)

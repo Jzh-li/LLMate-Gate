@@ -152,6 +152,48 @@ func TestStreamRestore_Orphan(t *testing.T) {
 	require.Equal(t, before+1, StreamOrphanTotal.Load())
 }
 
+// TestStreamRestorer_OrphansPerInstance 孤儿数必须按实例归属，不能被全局量串号。
+//
+// 这是 P1-6 的回归护栏：proxy 曾经拿全局 StreamOrphans() 当增量写 Prometheus，
+// 并发流式请求下会把 A 的残留记到 B 的 endpoint 标签上，且累计值当增量会指数虚增。
+func TestStreamRestorer_OrphansPerInstance(t *testing.T) {
+	pairs := []entryPair{{sentinel: "<<email_1>>", restoreTo: "a@b.com"}}
+	victim := NewStreamRestorer(pairs)
+	bystander := NewStreamRestorer(pairs)
+
+	// victim 制造一个未闭合哨兵；bystander 全程干净。
+	_, err := victim.Write([]byte("见 <<e"))
+	require.NoError(t, err)
+	_, err = victim.Close()
+	require.NoError(t, err)
+
+	require.Equal(t, int64(1), victim.Orphans(), "victim 应记 1 次残留")
+	require.Equal(t, int64(0), bystander.Orphans(), "bystander 不得被 victim 的残留污染")
+
+	// Close 幂等：重复 Close 不得重复计数（buf 已清空）。
+	_, err = victim.Close()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), victim.Orphans(), "Close 必须幂等，不重复计数")
+}
+
+// TestStreamRestorer_OrphansZeroOnCleanStream 正常流（含被拆开的完整占位符）不得计 orphan。
+func TestStreamRestorer_OrphansZeroOnCleanStream(t *testing.T) {
+	sr := NewStreamRestorer([]entryPair{{sentinel: "<<email_1>>", restoreTo: "a@b.com"}})
+	var got strings.Builder
+	out, err := sr.Write([]byte("邮箱 <<e"))
+	require.NoError(t, err)
+	got.Write(out)
+	out, err = sr.Write([]byte("mail_1>> 已收到"))
+	require.NoError(t, err)
+	got.Write(out)
+	rest, err := sr.Close()
+	require.NoError(t, err)
+	got.Write(rest)
+
+	require.Equal(t, "邮箱 a@b.com 已收到", got.String())
+	require.Equal(t, int64(0), sr.Orphans(), "跨块拼回的完整占位符不算残留")
+}
+
 // TestReplace_Redact 不可逆类型被替换成 [REDACTED] 且不参与还原。
 func TestReplace_Redact(t *testing.T) {
 	r := newTestReplacer("placeholder")

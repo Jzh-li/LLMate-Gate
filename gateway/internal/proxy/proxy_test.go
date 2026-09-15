@@ -694,5 +694,89 @@ func TestProxy_MetricsIntegration(t *testing.T) {
 	require.Greater(t, testutil.ToFloat64(m.PIIDetected.WithLabelValues("zh_phone", "reversible")), 0.0) // 回归：fate 标签仍正确
 }
 
+// TestProxy_StreamOrphanMetric 流式上游在末尾吐出不完整占位符（如 max_tokens 截断在
+// 占位符中间）→ llmate_stream_orphan_placeholders_total 必须按 endpoint 计 1。
+//
+// 这条用例锁死 P1-6 的修复：指标值必须是「本请求的实际残留数」，而不是全局累计量。
+// 用独立 registry，因此 == 1 同时证明「没有把全局累计值灌进来」。
+func TestProxy_StreamOrphanMetric(t *testing.T) {
+	v, err := vault.NewMemVault(testTTL, []byte("unit-test-passphrase"), false, "")
+	require.NoError(t, err)
+	det := detector.NewRegexEngine(detector.WithThresholds(map[string]float64{
+		"zh_person_name": 0.5, "zh_phone": 0.8,
+	}))
+	repl := replacer.New(replacer.Config{
+		Strategy: "placeholder", Irreversible: []string{"api_key", "password", "token"},
+		Simulate: simulator.SimulateZHConfig{}, SessionKey: []byte("session-key-32-bytes-long!!!"),
+	}, v)
+	proc := pipeline.New(pipeline.Config{Detector: det, Replacer: repl, Vault: v, FailClosed: true})
+
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		flusher, _ := w.(http.Flusher)
+		_, _ = w.Write([]byte("data: " + `{"choices":[{"delta":{"content":"好的"}}]}` + "\n\n"))
+		flusher.Flush()
+		// 半截占位符：`<<zh_ph` 是 `<<zh_phone_1>>` 的严格前缀 → 还原器只能记为残留。
+		_, _ = w.Write([]byte("data: " + `{"choices":[{"delta":{"content":"<<zh_ph"}}]}` + "\n\n"))
+		flusher.Flush()
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		flusher.Flush()
+	}))
+	t.Cleanup(up.Close)
+
+	reg := prometheus.NewRegistry()
+	m := metrics.New(reg)
+	px := New(proc, &Upstream{URL: mustParse(t, up.URL)}, nil, m, false, nil)
+
+	body := `{"messages":[{"role":"user","content":"我的手机13800138000"}],"stream":true}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	rec := &flushingRecorder{httptest.NewRecorder()}
+	px.Handle(rec, req, "chat.completions", true)
+
+	require.Equal(t, 200, rec.Code)
+	require.Equal(t, 1.0,
+		testutil.ToFloat64(m.StreamOrphans.WithLabelValues("chat.completions")),
+		"残留哨兵必须按 endpoint 计 1（且不是全局累计值）")
+	// 干净端点标签不得被计数（归属精确性）
+	require.Equal(t, 0.0, testutil.ToFloat64(m.StreamOrphans.WithLabelValues("embeddings")))
+}
+
+// TestProxy_BufferedOrphanMetric 非流式路径同样要记残留（整包还原也可能卡在半截哨兵）。
+func TestProxy_BufferedOrphanMetric(t *testing.T) {
+	v, err := vault.NewMemVault(testTTL, []byte("unit-test-passphrase"), false, "")
+	require.NoError(t, err)
+	det := detector.NewRegexEngine(detector.WithThresholds(map[string]float64{
+		"zh_person_name": 0.5, "zh_phone": 0.8,
+	}))
+	repl := replacer.New(replacer.Config{
+		Strategy: "placeholder", Irreversible: []string{"api_key", "password", "token"},
+		Simulate: simulator.SimulateZHConfig{}, SessionKey: []byte("session-key-32-bytes-long!!!"),
+	}, v)
+	proc := pipeline.New(pipeline.Config{Detector: det, Replacer: repl, Vault: v, FailClosed: true})
+
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// 响应体末尾被截断在半截占位符上（连接中断的典型形态）。
+		// 非流式路径对整包做字节级还原，残留判定要求缓冲区「以哨兵前缀结尾」。
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"我的手机 <<zh_ph`))
+	}))
+	t.Cleanup(up.Close)
+
+	reg := prometheus.NewRegistry()
+	m := metrics.New(reg)
+	px := New(proc, &Upstream{URL: mustParse(t, up.URL)}, nil, m, false, nil)
+
+	body := `{"messages":[{"role":"user","content":"我的手机13800138000"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	px.Handle(rec, req, "chat.completions", false)
+
+	require.Equal(t, 200, rec.Code)
+	require.Equal(t, 1.0,
+		testutil.ToFloat64(m.StreamOrphans.WithLabelValues("chat.completions")),
+		"非流式路径的残留同样必须计入")
+}
+
 
 

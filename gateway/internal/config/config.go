@@ -4,6 +4,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -12,7 +13,6 @@ import (
 
 	gatewayerrors "gateway/internal/errors"
 	"gateway/internal/simulator"
-	"gateway/pkg/types"
 
 	"gopkg.in/yaml.v3"
 )
@@ -231,6 +231,30 @@ func expandEnvDeep(c *Config) {
 	c.Detection.Registry.Path = expandEnv(c.Detection.Registry.Path)
 }
 
+// backtickRe 匹配 yaml.v3 错误消息里回显的值片段。
+var backtickRe = regexp.MustCompile("`[^`]*`")
+
+// describeYAMLError 把 yaml.v3 的解析错误压成一行可定位的提示。
+//
+// 严格模式下最常见的是「未知键」：yaml 会给出形如
+// `line 5: field upstream not found in type config.Config` 的明细，
+// 这是用户唯一能定位键名拼错的线索，必须带出来——旧实现只报一句
+// "parse config yaml"，用户完全不知道哪里写错了。
+//
+// 与 registry.redactYAMLError 同款处理：抹掉反引号内回显的值，避免把配置里的
+// 明文（如 upstream_api_key）写进启动日志。键名与行号保留，排查够用。
+func describeYAMLError(err error) string {
+	var te *yaml.TypeError
+	if errors.As(err, &te) {
+		parts := make([]string, 0, len(te.Errors))
+		for _, e := range te.Errors {
+			parts = append(parts, backtickRe.ReplaceAllString(e, "`…`"))
+		}
+		return strings.Join(parts, "; ")
+	}
+	return backtickRe.ReplaceAllString(err.Error(), "`…`")
+}
+
 // Load 从 YAML 文件加载配置；path 为空时返回默认配置。
 func Load(path string) (*Config, error) {
 	c := Default()
@@ -240,8 +264,22 @@ func Load(path string) (*Config, error) {
 			return nil, gatewayerrors.Wrap(gatewayerrors.CodeInvalidConfig, "read config file", err)
 		}
 		// 先展开再解析，保证 ${ENV} 在 YAML 语义之前生效。
-		if err := yaml.Unmarshal([]byte(expandEnv(string(raw))), c); err != nil {
-			return nil, gatewayerrors.Wrap(gatewayerrors.CodeInvalidConfig, "parse config yaml", err)
+		//
+		// 用严格模式（KnownFields）：出现结构体里不存在的键就直接报错。
+		// 默认的宽松解析会静默丢弃拼错的键——用户按安装脚本提示写了
+		// upstream.api_key（正确键是 gateway.upstream_api_key），网关一声不吭
+		// 地用空 key 转发、上游 401，而启动日志与配置摘要里看不出任何异常。
+		// 本项目其余校验一律「失败即退出、不降级」，未知键不应例外。
+		//
+		// 空文件按「全部走默认值」处理（与旧行为一致，首次运行时常见）。
+		expanded := expandEnv(string(raw))
+		if strings.TrimSpace(expanded) != "" {
+			dec := yaml.NewDecoder(strings.NewReader(expanded))
+			dec.KnownFields(true)
+			if err := dec.Decode(c); err != nil {
+				return nil, gatewayerrors.Errorf(gatewayerrors.CodeInvalidConfig,
+					"parse config yaml: %s", describeYAMLError(err))
+			}
 		}
 	}
 	expandEnvDeep(c)
@@ -351,32 +389,13 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// simulatableTypeOrder 支持仿真替换的实体类型，顺序固定（供面板下拉与文档直接使用），
-// 与 simulator.Generator.Fake 的 switch 保持一致。
-var simulatableTypeOrder = []string{
-	types.EntityPersonName,
-	types.EntityPhone,
-	types.EntityIDCard,
-	types.EntityBankCard,
-	types.EntityAddress,
-	types.EntityEmail,
-	types.EntityIPAddress,
-	types.EntityDate,
-}
-
-var simulatableSet = func() map[string]bool {
-	m := make(map[string]bool, len(simulatableTypeOrder))
-	for _, t := range simulatableTypeOrder {
-		m[t] = true
-	}
-	return m
-}()
-
 // SimulatableTypes 返回可仿真的实体类型副本。
+//
+// 权威来源是 simulator.simulatable 登记表（simulator.Fake 的派发依据）。此处刻意
+// 不再维护第二份清单——早期本文件有一份与 simulator 的 switch 手工对齐的列表，
+// 一旦有人只改一边，面板下拉与词典校验就会和实际仿真能力脱节。
 func SimulatableTypes() []string {
-	out := make([]string, len(simulatableTypeOrder))
-	copy(out, simulatableTypeOrder)
-	return out
+	return simulator.SimulatableTypes()
 }
 
 // ValidateSimulateDictionary 校验仿真词典（配置加载期与面板热加载共用同一套规则）。
@@ -388,7 +407,7 @@ func SimulatableTypes() []string {
 func ValidateSimulateDictionary(dict map[string]map[string]string) error {
 	seen := make(map[string]string) // 仿真值 → "类型/真实值"
 	for entityType, pairs := range dict {
-		if !simulatableSet[entityType] {
+		if !simulator.Simulatable(entityType) {
 			return gatewayerrors.Errorf(gatewayerrors.CodeInvalidConfig,
 				"replacement.simulate_zh.dictionary: unknown or non-simulatable entity type %q", entityType)
 		}
@@ -421,9 +440,86 @@ func (c *Config) ThresholdFor(entityType string) float64 {
 	return 0.5
 }
 
+// EffectiveUpstream 一条「实际生效」的上游路由。
+//
+// 与 UpstreamConfig 的区别：APIKey 是明文（供建连使用），因此它的 String() 只输出
+// set / none(passthrough)，绝不把 key 本身写进日志或配置摘要。
+type EffectiveUpstream struct {
+	Protocol   string
+	BaseURL    string
+	APIKey     string
+	APIVersion string
+	PathPrefix string
+}
+
+// String 输出可安全落日志的形态：只报「有没有 key」，不报 key 内容。
+func (u EffectiveUpstream) String() string {
+	key := "key=none(passthrough)"
+	if strings.TrimSpace(u.APIKey) != "" {
+		key = "key=set"
+	}
+	s := u.Protocol + "=" + u.BaseURL
+	if u.PathPrefix != "" {
+		s += " path_prefix=" + u.PathPrefix
+	}
+	if u.APIVersion != "" {
+		s += " api_version=" + u.APIVersion
+	}
+	return s + " " + key
+}
+
+// EffectiveUpstreams 返回合并后实际生效的上游路由（openai 在前，anthropic 其后）。
+//
+// 合并语义是「默认值 + 同协议覆盖」，而这一点很容易踩坑：
+// gateway.upstream 是必需的默认 OpenAI 上游，upstreams 里 protocol=openai 的条目会
+// 静默覆盖它。于是只打印 gateway.upstream 会把已被覆盖的旧值当成生效值——用户改了
+// upstreams 发现「没生效」，看日志却被带偏。
+//
+// 本方法是这层合并语义的**唯一实现**：启动日志（Config.String）与真实建连
+// （cmd/llmate-gate）都走它，二者不可能再各说各话。
+func (c *Config) EffectiveUpstreams() []EffectiveUpstream {
+	openai := EffectiveUpstream{
+		Protocol: "openai",
+		BaseURL:  c.Gateway.Upstream,
+		APIKey:   c.Gateway.UpstreamAPIKey,
+	}
+	var anthropic *EffectiveUpstream
+	for _, u := range c.Gateway.Upstreams {
+		e := EffectiveUpstream{
+			Protocol:   u.Protocol,
+			BaseURL:    u.BaseURL,
+			APIKey:     u.APIKey,
+			APIVersion: u.APIVersion,
+			PathPrefix: u.PathPrefix,
+		}
+		switch u.Protocol {
+		case "openai":
+			openai = e
+		case "anthropic":
+			if e.APIVersion == "" {
+				e.APIVersion = "2023-06-01"
+			}
+			cp := e
+			anthropic = &cp
+		}
+	}
+	out := []EffectiveUpstream{openai}
+	if anthropic != nil {
+		out = append(out, *anthropic)
+	}
+	return out
+}
+
 // String 打印脱敏后的配置摘要（绝不打印 token / key）。
+//
+// upstreams 打印的是**合并后的生效值**而非 gateway.upstream 字面量，理由见
+// EffectiveUpstreams 的注释。
 func (c *Config) String() string {
-	return fmt.Sprintf("listen=%s upstream=%s engine=%s strategy=%s fail_closed=%v debug=%v",
-		c.Gateway.Listen, c.Gateway.Upstream, c.Detection.Engine, c.Replacement.Strategy,
+	routes := make([]string, 0, 2)
+	for _, u := range c.EffectiveUpstreams() {
+		routes = append(routes, u.String())
+	}
+	return fmt.Sprintf("listen=%s upstreams=[%s] engine=%s strategy=%s fail_closed=%v debug=%v",
+		c.Gateway.Listen, strings.Join(routes, "; "), c.Detection.Engine, c.Replacement.Strategy,
 		c.Policy.FailClosed, c.Gateway.Debug)
 }

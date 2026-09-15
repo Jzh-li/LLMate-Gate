@@ -132,9 +132,104 @@ func TestRegexEngine_ChineseEntities(t *testing.T) {
 	}
 }
 
+// TestRegexEngine_PersonName_NoParticleOvercapture 人名不得把尾部助词吞进来。
+//
+// 回归护栏：reNameCtx / reNameTile 的 `[一-龥]{2,4}` 是贪婪的，引导词紧邻人名时
+// 会多捕一个字 ——「员工张三的身份证号是…」曾捕出 4 字人名「张三的身」。
+// 这是精确率缺陷（引擎的设计契约是对弱格式实体「只保证精确率」）。
+func TestRegexEngine_PersonName_NoParticleOvercapture(t *testing.T) {
+	e := NewRegexEngine(WithThresholds(map[string]float64{
+		"zh_person_name": 0.5, "zh_id_card": 0.9, "zh_phone": 0.8,
+	}))
+
+	cases := []struct {
+		text string
+		want string // 期望的人名值（"" 表示不应检出人名）
+	}{
+		// 核心回归：掩码身份证使 id_card 规则不命中，人名规则曾把「的身」吞进来
+		{"员工张三的身份证号是 110101********8531，请核对。", "张三"},
+		{"员工李四的身份证号是 110101********8531，请核对。", "李四"},
+		{"员工张三的身份证号是110101199003078531", "张三"},
+		// 四字名（复姓 + 双字名）不得被误截
+		{"客户欧阳娜娜确认出席。", "欧阳娜娜"},
+		{"联系人上官婉儿确认出席。", "上官婉儿"},
+		// 三字名末字落在「和」这类可能作名末字的字上 → 不截断
+		{"联系人李永和确认收到。", "李永和"},
+		// 没有引导词 / 称谓时本就低召回（引擎的已声明边界），不得因截断而改变
+		{"本次合作由欧阳娜娜代表团队出面。", ""},
+		// 称谓规则同样要截：「王五的先生」捕到「王五的」+ 称谓，人名应是「王五」
+		{"王五的先生到了。", "王五"},
+		// 称谓规则的正例不受影响
+		{"张三先生明天到。", "张三"},
+	}
+	for _, c := range cases {
+		resp, err := e.Detect(context.Background(), &types.DetectRequest{Text: c.text})
+		require.NoError(t, err)
+		var got string
+		for _, ent := range resp.Entities {
+			if ent.Type == "zh_person_name" {
+				got = ent.Value
+				require.Equal(t, c.text[ent.Start:ent.End], ent.Value, "偏移必须与原文切片一致")
+			}
+		}
+		require.Equal(t, c.want, got, "text=%q", c.text)
+	}
+}
+
+// TestRegexEngine_PersonName_AllOccurrencesReported 同一段文本里重复出现的同名 PII
+// 必须**逐次**上报。
+//
+// 回归护栏（这是一处真实泄漏）：早期 scanPersonName / scanPlateEN 用 `map[string]bool`
+// 按**值**去重，于是同一段文本里第二处同名的人名只上报一次，后续出现原样发往上游
+// —— 网关存在的意义就是拦住这件事。端到端复现（工具调用载荷里同一段文本落在两个
+// 字段中，两处都带引导词）：
+//
+//	IN : [{"content": "我叫李杰琪"}, {"content": "联系人李杰琪"}]
+//	OUT: [{"content": "我叫<<zh_person_name_1>>"}, {"content": "联系人李杰琪"}]   ← 泄漏
+//
+// 注意：本用例要求两处都带强引导词 —— 人名规则是「上下文引导 + 精确率优先」，
+// 不带引导词的第二次出现本就不在召回范围内（引擎的已声明边界）。
+// 去重必须按区间（span），规则之间的重叠交给 replacer.sanitizeEntities 消解。
+func TestRegexEngine_PersonName_AllOccurrencesReported(t *testing.T) {
+	e := NewRegexEngine(WithThresholds(map[string]float64{"zh_person_name": 0.5}))
+
+	text := "我叫李杰琪，联系人李杰琪。"
+	resp, err := e.Detect(context.Background(), &types.DetectRequest{Text: text})
+	require.NoError(t, err)
+
+	var names []types.Entity
+	for _, ent := range resp.Entities {
+		if ent.Type == "zh_person_name" {
+			names = append(names, ent)
+			require.Equal(t, text[ent.Start:ent.End], ent.Value, "偏移必须与原文切片一致")
+		}
+	}
+	require.Len(t, names, 2, "两处引导词命中的同名 PII 都要上报，否则第二处明文会泄漏到上游")
+	require.Equal(t, "李杰琪", names[0].Value)
+	require.Equal(t, "李杰琪", names[1].Value)
+	require.NotEqual(t, names[0].Start, names[1].Start, "两次上报必须是不同的区间")
+}
+
+// TestRegexEngine_PlateEN_AllOccurrencesReported 车牌同样逐次上报（与上面同源缺陷）。
+func TestRegexEngine_PlateEN_AllOccurrencesReported(t *testing.T) {
+	e := NewRegexEngine(WithThresholds(map[string]float64{"plate": 0.5}))
+
+	text := "license plate: ABC-1234 was seen, again license plate: ABC-1234 nearby."
+	resp, err := e.Detect(context.Background(), &types.DetectRequest{Text: text})
+	require.NoError(t, err)
+
+	var plates []types.Entity
+	for _, ent := range resp.Entities {
+		if ent.Type == "plate" {
+			plates = append(plates, ent)
+		}
+	}
+	require.Len(t, plates, 2, "两次出现都要上报")
+	require.NotEqual(t, plates[0].Start, plates[1].Start)
+}
+
 // TestRegexEngine_IDCardChecksum 身份证必须通过 ISO 7064 校验位。
-func TestRegexEngine_IDCardChecksum(t *testing.T) {
-	e := NewRegexEngine()
+func TestRegexEngine_IDCardChecksum(t *testing.T) {	e := NewRegexEngine()
 	resp, err := e.Detect(context.Background(), &types.DetectRequest{
 		Text: "身份证11010519491231002X，另一个110105194912310021"})
 	require.NoError(t, err)

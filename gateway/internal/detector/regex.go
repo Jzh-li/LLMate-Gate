@@ -242,20 +242,29 @@ func (e *RegexEngine) scan(text string) []types.Entity {
 	return out
 }
 
+// span 是「同一段文本内已上报区间」的去重键。
+//
+// 为什么必须按区间而不是按值去重：一段文本里同一个 PII 值可以合法地出现多次
+// （「我叫李杰琪，请转告李杰琪」）。按键值去重会只上报第一次，后续出现的明文就
+// 直接泄漏到上游 —— 早期 scanPersonName / scanPlateEN 正是这么写的，实测可复现泄漏。
+//
+// 本层去重只解决「同一条规则或两条规则对**同一段**重复上报」；规则之间的区间重叠
+// 由下游 replacer.sanitizeEntities 统一消解（保留更长者）。
+type span struct{ start, end int }
+
 // scanPlateEN 英文车牌：上下文引导（license/vehicle/registration plate）
 // + 只报捕获组的车牌本体（不含引导词）。与 scanPersonName 同构。
 // 弱格式实体在正则引擎下只保证精确率——无上下文的 "ABC-1234" 不报。
 func (e *RegexEngine) scanPlateEN(text string) []types.Entity {
 	var out []types.Entity
-	seen := map[string]bool{}
+	seen := map[span]bool{}
 	appendPlate := func(start, end int) {
-		v := text[start:end]
-		if seen[v] {
+		if seen[span{start, end}] {
 			return
 		}
-		seen[v] = true
+		seen[span{start, end}] = true
 		out = append(out, types.Entity{
-			Type: types.EntityPlate, Value: v, Start: start, End: end, Score: 0.75,
+			Type: types.EntityPlate, Value: text[start:end], Start: start, End: end, Score: 0.75,
 		})
 	}
 	for _, m := range rePlateEN.FindAllStringSubmatchIndex(text, -1) {
@@ -324,20 +333,75 @@ func (e *RegexEngine) scanSecretKV(text string) []types.Entity {
 	return out
 }
 
-// scanPersonName 高精度人名启发式：必须有强上下文或称谓，且首字在常见姓氏表内。
+// nameParticles 绝不会出现在中文姓名里的结构助词 / 虚词。
+//
+// 用途见 trimNameParticle。刻意**不含**「和 / 有 / 会 / 能 / 要」：这几个字虽然也
+// 常作虚词，却同样可以是真实姓名的末字（李永和、张有、陈会…）。把它们当截断信号，
+// 会把「联系人李永和确认收到」截成「李永」—— 拿一个精确率问题换一个召回率问题，
+// 不划算。它们造成的残留过捕获（「联系人张三和客户王五」）见 trimNameParticle 注释。
+var nameParticles = map[rune]bool{
+	'的': true, '了': true, '是': true, '在': true, '把': true, '被': true,
+	'让': true, '不': true, '这': true, '那': true, '个': true, '些': true,
+	'们': true, '吗': true, '呢': true, '吧': true, '就': true, '都': true,
+	'也': true, '还': true, '很': true, '没': true, '给': true, '对': true,
+	'从': true, '向': true, '该': true, '其': true, '并': true, '则': true,
+	'等': true, '或': true, '而': true, '由': true, '及': true, '与': true,
+	'为': true, '以': true, '之': true,
+}
+
+// trimNameParticle 把贪婪捕获的人名截回真实长度。
+//
+// 背景：`[一-龥]{2,4}` 是左对齐贪婪匹配，多吞的字总是紧跟在真实人名之后
+// （「员工张三的身份证…」捕到 4 个 rune「张三的身」）。因此只需判断「多吞了几个」。
+//
+// 判定依据是中文姓名的构词约束：
+//   - **4 rune**：四字名几乎只能是「复姓 + 双字名」（欧阳 / 司马 / 上官 / 诸葛 /
+//     尉迟 / 令狐…）。前缀不是复姓 → 一定多吞了字：第 3 字是硬助词就只剩两字名
+//     （张三的身 → 张三），否则是「三字名 + 多吞 1 字」（张伟明今 → 张伟明）。
+//   - **3 rune**：第 3 字是硬助词 → 两字名 + 助词（张三的 → 张三）；否则原样保留
+//     （李永和）。
+//
+// 已知残留：两字名后接「和 / 有 / 会 / 能 / 要」时会多留一个字
+// （「联系人张三和客户王五」→ 张三和）。这些字是真实姓名的合法末字，正则层面
+// 无法区分，交由 detection.engine=pii-engineer 的 NER 模型消解 —— 这与本引擎
+// 「弱格式实体只保证精确率、完整召回依赖 NER」的定位一致。
+func trimNameParticle(runes []rune) []rune {
+	switch len(runes) {
+	case 4:
+		if commonSurnames[string(runes[:2])] {
+			return runes // 合法的复姓四字名，不动
+		}
+		if nameParticles[runes[2]] {
+			return runes[:2]
+		}
+		return runes[:3]
+	case 3:
+		if nameParticles[runes[2]] {
+			return runes[:2]
+		}
+		return runes
+	default:
+		return runes
+	}
+}
+
+// scanPersonName 高精度人名启发式：必须有强上下文或称谓，且首字在常见姓氏表内，
+// 且贪婪捕获的尾部助词会被截掉（见 trimNameParticle）。
 func (e *RegexEngine) scanPersonName(text string) []types.Entity {
-	seen := map[string]bool{}
+	seen := map[span]bool{}
 	var out []types.Entity
 	appendName := func(start, end int, score float64) {
-		v := text[start:end]
-		runes := []rune(v)
-		if seen[v] || len(runes) < 2 || len(runes) > 4 {
+		runes := trimNameParticle([]rune(text[start:end]))
+		// 截断后按 rune 数回算结束偏移（被截掉的部分不计入实体）。
+		v := string(runes)
+		end = start + len(v)
+		if seen[span{start, end}] || len(runes) < 2 || len(runes) > 4 {
 			return
 		}
 		if !commonSurnames[string(runes[0])] && !commonSurnames[string(runes[:2])] {
 			return
 		}
-		seen[v] = true
+		seen[span{start, end}] = true
 		out = append(out, types.Entity{
 			Type: types.EntityPersonName, Value: v, Start: start, End: end, Score: score,
 		})

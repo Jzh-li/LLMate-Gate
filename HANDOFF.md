@@ -1,6 +1,24 @@
 # LLMate-Gate · 会话交接包
 
-> **给下一个 workbuddy 会话**：从任何账号、任何机器打开这个仓，先读本文件的前 3 节，再按 §5 任务队列继续推进。
+> **给下一个 workbuddy 会话**：从任何账号、任何机器打开这个仓，**先读 §0（状态速览）→ §1（这是什么）→ §5（任务队列）**，再按需深入。
+
+---
+
+## 0. 当前状态速览（2026-09-15 17:40 更新）
+
+| 项 | 状态 |
+|---|---|
+| **仓可见性** | ✅ **public**（2026-09-12 晚切公开，anonymous 可 clone） |
+| **HEAD** | `a32cec1`，工作树干净，已推 origin/main |
+| **Release** | ✅ **v0.1.0 已真发布**：https://github.com/Jzh-li/LLMate-Gate/releases/tag/v0.1.0 （7 assets = 6 平台二进制 + SHA256SUMS） |
+| **CI** | ✅ 9 job 全绿（verify(-race) / build / e2e / coverage / bench / bench-baseline / lint / perf / vuln） |
+| **合成语料 F1** | 1.0000（240 条中文 + 180 条英文）——过拟合基线，**不是**对外宣称值 |
+| **真对抗 F1** | **0.7458**（28 条手写样本；P=0.9565 / R=0.6111）——这才是诚实数字，已上 README |
+| **开源就绪** | ✅ 治理三件套齐全；🔴 仅剩 Linux/macOS `install.sh` 真机冒烟未做 |
+
+> ⚠️ 真对抗暴露的盲区：`zh_person_name` / `zh_address` F1 = **0.0**（regex 引擎未覆盖），`id_card_masked` F1 = 0.0（已知弱项）。这是 v1.1 是否引入 NER sidecar 的决策依据。
+
+> 📌 产物一眼可验证：`bench/reports/adversarial_20260912-195233.md`（真对抗报告）；`bench/fixtures/cases_adversarial.jsonl`（28 条样本）。
 
 ---
 
@@ -9,7 +27,7 @@
 LLMate-Gate 是一个 LLM 网关中间件，反向代理 OpenAI 兼容接口，在请求/响应中自动**检测 + 替换 + 还原**中文 PII（个人身份信息）。
 不是 SDK / 不是一个简单聊天前端；是一个能"嵌入现有 LLM 工具链的隐私中间层"——VS Code 扩展、Claude Code hooks、MCP 客户端都通过它走。
 
-最新形态：v1 收口阶段，已超 Spark §16 验收线（中文召回率 **100%** / p99 **23ms**）。
+最新形态：v1 收口阶段，合成语料口径下超 Spark §16 验收线（中文召回率 **100%** / p99 **23ms**）；真对抗口径 F1 **0.7458**（见 §0）。
 
 ---
 
@@ -34,7 +52,7 @@ LLMate-Gate 是一个 LLM 网关中间件，反向代理 OpenAI 兼容接口，�
 | `.workbuddy/memory/` | workbuddy 会话日志（gitignored，新会话自动读） |
 | `HANDOFF.md` | **本文件** |
 | `LICENSE` | Apache 2.0 全文 |
-| `cn-pii-bench` *(github.com/Jzh-li/cn-pii-bench@main)* | 中文 PII 评测语料与评估器，**已作为 `bench/` submodule 关联**（commit `4ccd538`） |
+| `cn-pii-bench` *(github.com/Jzh-li/cn-pii-bench@main)* | 中文 PII 评测语料与评估器，**已作为 `bench/` submodule 关联**（当前指针 `ba68298`，含真对抗语料）；**已 public** |
 
 ---
 
@@ -45,8 +63,18 @@ LLMate-Gate 是一个 LLM 网关中间件，反向代理 OpenAI 兼容接口，�
 | 用途 | 路径 | 备注 |
 |---|---|---|
 | 代码编辑 / git 操作 | `\\wsl.localhost\Debian\home\jzhli\LLMate-Gate\` (WSL 9P) | 千万别 `cd` 到 `/c/...` 改 gateway 代码——`go.mod` 无法 lock |
-| 编译 / 测试 / vet | `C:/Users/jzh-l/AppData/Local/Temp/lmgate/gateway\` (NTFS scratch) | 通过 `dev.sh sync` 同步 |
-| 跑冒烟（mock-llm + gateway） | NTFS scratch 同上 | 二进制直接放这里 |
+| 编译 / 测试 / vet | **由 `dev.sh` 自动决定**（见下） | 不再硬编码用户路径 |
+| 跑冒烟（mock-llm + gateway） | 同上 build 目录 | 二进制直接放这里 |
+
+**build 目录选址逻辑（2026-09-12 起，`8c6a237`）**：
+
+| 仓位置 | 默认 build 目录 |
+|---|---|
+| 非 9P（普通 Linux / macOS / NTFS） | 仓内 `.build/`（已 gitignore） |
+| 9P（`//wsl.localhost/` / `\\wsl.localhost\` / `/9p/`） | `mktemp -d` 一次性 scratch（自动避开 9P 锁文件问题） |
+| 显式覆盖 | `LMGATE_BUILD=/path`（dev.sh）或 `LMGBUILD=/path`（release.sh） |
+
+> 9P 判定函数：`is_9p_workspace()`，认三种路径形式。`bash scripts/dev.sh envcheck` 可自检。
 
 GitBash（Windows）路径用 `//wsl.localhost/...` 双斜杠前缀；WSL 内部用 `/home/jzhli/...`。同一目录的两种写法不一致。
 
@@ -57,14 +85,14 @@ GitBash（Windows）路径用 `//wsl.localhost/...` 双斜杠前缀；WSL 内部
 cd //wsl.localhost/Debian/home/jzhli/LLMate-Gate
 # vim/编辑器改 gateway/**/*.go
 
-# 2. 同步到 NTFS scratch（绕过 9P 锁文件坑）
+# 2. 同步到 build 目录（绕过 9P 锁文件坑）
 bash scripts/dev.sh sync          # 强制全量同步
 
-# 3. 编译（在 NTFS 仓内）
-cd /c/Users/jzh-l/AppData/Local/Temp/lmgate/gateway
-go build -o ./llmate-gate.exe ./cmd/llmate-gate
-# 或 go test -count=1 ./...
-# 或 bash scripts/dev.sh buildall （含 sync + 4 个二进制）
+# 3. 编译（build 目录由 dev.sh 决定，见 §3.1）
+bash scripts/dev.sh build                  # sync + build 单二进制
+bash scripts/dev.sh buildall               # sync + 4 个二进制（含 mock-llm / mock-detector / mcp-server）
+bash scripts/dev.sh test                   # go test -count=1 ./...
+bash scripts/dev.sh envcheck               # 打印实际 build 目录 + 环境自检
 
 # 4. 跑冒烟（mock-llm + gateway，前后台）
 ./mock-llm.exe --listen :8999 &               # 后台
@@ -120,63 +148,113 @@ git -c safe.directory='*' push origin main
 | `cd36ced` | fix(release): 修正跨平台编译工作目录与产物路径 | release.yml 从仓库根改 working-directory: gateway |
 | **tag `v0.1.0`** | 首版可分发里程碑（2026-09-11） | 推 tag 触发 CI 自动跨平台编译 + 建 GitHub Release |
 
-完整：`git -c safe.directory='*' log --oneline -20`
+### 后续（2026-09-12 下午 → 09-15）：CI 版本漂移修复链 + 开源就绪
+
+| commit | 含义 |
+|---|---|
+| `b0d4919` | checkout@v6 加 SUBMODULE_TOKEN（当时 cn-pii-bench 还是私有仓） |
+| `d633ec8` | 首跑生成 bench 性能基线 [skip ci] |
+| `e9ee7b9` | cn-pii-bench 改 public 后移除 SUBMODULE_TOKEN 注入 |
+| `d26c9e6` | golangci-lint 改用官方 action@v6 并固定 v2.6.1 |
+| `e655c78` | 修 lint/vuln 版本漂移 + upload-artifact 升 v6 |
+| `d40a7e5` | govulncheck 固定 v1.1.4（官方 action 内部仍 @latest，不可靠）+ lint action 升 v9（Node 24） |
+| `6acb124` | **Go 1.24.9 → 1.25.13**（一刀修 20 个 stdlib 可达漏洞） |
+| `8c6a237` | dev.sh/release.sh 去硬编码用户路径（开源 P0-1） |
+| `fef6f73` | release.yml 同步 Go 1.25.13 + actions v6 + 支持 workflow_dispatch 重发 |
+| `c794ae0` | 治理三件套 SECURITY / CONTRIBUTING / CODE_OF_CONDUCT |
+| `82975ab` | bench submodule 指向真对抗语料（`ba68298`） |
+| `a32cec1` | install.sh 加 `--dry-run` + README 加 Quickstart / 真对抗性能段 |
+
+> 2026-09-15：仓切 public + force-update `v0.1.0` tag 指向 `a32cec1` → release workflow 重跑成功，7 个 artifact 真上传。
+
+完整：`git -c safe.directory='*' log --oneline -30`
 
 ---
 
-## 5. 任务队列（按 Spark Phase 4/§16 优先级）
+## 5. 任务队列（2026-09-15 重排）
 
-完整卡见 `.workbuddy/TODO_QUEUE.md`。这里给**重要性顺序**：
+完整卡见 `.workbuddy/TODO_QUEUE.md`（gitignored，仅本机）。这里给**重要性顺序**：
 
-### 🔴 卡点 1：等用户给 cn-pii-bench 远程仓 URL
+### 🔴 唯一待办：Linux/macOS `install.sh` 真机冒烟
 
-- 当前：`C:/Users/jzh-l/cn-pii-bench/` 本地仓就绪（2 提交），`git remote -v` 空
-- 收到 URL 后 5min 内可完成：
-  1. `git -C /c/Users/jzh-l/cn-pii-bench remote add origin <URL>` + `git push -u origin main`
-  2. 主仓 `bench/` 转 submodule（`git -c safe.directory='*' submodule add <URL> bench`），提交 `.gitmodules`
-  3. CI 两个 bench job 加 `submodules: true`，推一次验证
+- 代码已就绪（`--dry-run` / `--no-autostart` / `--uninstall` 三模式），静态校验通过
+- 但**从未在真 Linux / macOS 上跑过**——本机是 Windows，沙箱内 WSL 被 policy 拦截
+- 命令：
+  ```bash
+  ./scripts/install.sh --dry-run                     # 先看计划
+  ./scripts/install.sh --no-autostart --port 8400    # 真装
+  systemctl --user status llmate-gate                # 或 launchctl print gui/$(id -u)/...
+  ./scripts/install.sh --uninstall                   # 卸载验证
+  ```
+- Windows 侧 `install.ps1` 已于 2026-09-12 真机冒烟通过（`0cea49b`）
 
-### 🟡 高优先：Tauri 桌面托盘 UI
+### ⚪ v1.1 决策入口：真对抗盲区 → 是否上 NER
 
-- 这是 Phase 4 收口最后一块大拼图
-- 本机 Rust 工具链未装，需要先 `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-- 工作量：多日（涉及 Tauri 模板 + 系统托盘 + 浏览器调网关 + 跨平台打包）
-- 决策点：先 minimal 系统托盘（不引入 Tauri，仅 tray + 浏览器跳转），还是直接上 Tauri？
+真对抗 F1=0.7458（见 §0）暴露两类完全未覆盖：
 
-### 🟢 中优先：打包分发
+| 盲区 | F1 | 候选解法 |
+|---|---|---|
+| `zh_person_name` | 0.0 | 引入 NER（PII Engineer sidecar）或词表 + 上下文启发式 |
+| `zh_address` | 0.0 | 行政区划词典 + 后缀模式 |
+| `id_card_masked` | 0.0 | 允许 `*` 通配的身份证正则 |
 
-- 紧随 Tauri：brew / scoop / AppImage 三脚本
-- 工作量：半日
+- **触发条件**：用户决定"要打真实场景"时启；否则 v1 以 regex 引擎为范围声明即可
+- 成本参考：PII Engineer 公开规格 F1=0.918（英文维度），集成工作量 = 多日
 
-### ⚪ 低优先：realistic adversarial fixture
+### 🟢 可选：Homebrew tap 上架
 
-- 合成语料 F1=1.0 已完美，但合成样本不代表真实分布
-- 等真实对抗语料出现明确短板再决定是否启 NER（PII Engineer）
-- F1 数据：regex 1.0 vs PII Engineer 0.918；集成 ROI = 0（合成维度）
-- 等真实对抗维度再看
+- `scoop-bucket/` 已就绪（Windows）；`homebrew-tap` 未建
+- 工作量：半天
 
-### 🔵 末段 · 构建与部署（闸门：功能主题全部收口后）
+### 🟢 可选：开源协作基础设施
+
+- issue 模板 / PR 模板 未加（`.github/ISSUE_TEMPLATE/`、`PULL_REQUEST_TEMPLATE.md`）
+- 工作量：10 分钟
+
+### ⚪ 已放弃 / 明确不做
+
+| 项 | 原因 |
+|---|---|
+| Tauri 桌面 UI | 改走系统原生（计划任务 / systemd / launchd + 桌面 LNK），CGO 与纯 Go 交叉编译冲突 |
+| systray 托盘 | 同上（CGO） |
+| AppImage | 后置 v1.1 |
+| 服务端托管 / 域名 / K8s / Docker | **用户拍板（2026-09-10）：核心功能优先，部署后置**。产品形态是本机常驻网关，无服务端需求 |
+
+### ✅ 已闭环（2026-09-12 ~ 09-15，勿重复做）
+
+| 项 | 结果 |
+|---|---|
+| cn-pii-bench 远程仓 | ✅ 已建 + 转 submodule + 改 public |
+| GitHub Release artifact | ✅ v0.1.0 7 assets 真发出 |
+| 治理三件套 | ✅ SECURITY / CONTRIBUTING / CODE_OF_CONDUCT |
+| 真对抗语料 + 评估器 | ✅ 28 条样本，F1=0.7458 |
+| scripts 硬编码路径 | ✅ 已去（默认仓内 `.build/`，9P 走 mktemp） |
+| `--version` flag | ✅ `6b922ac`（scoop `post_install` 依赖） |
+| Go 版本漏洞 | ✅ CI Go 升 1.25.13，govulncheck 0 可达漏洞 |
+
+### 🔵 构建与部署：闸门状态（2026-09-15）
 
 **用户决策（2026-09-10）**：核心功能优先，**部署（服务器 / 域名 / 容器化 / 发布流水线）后置**；
 **「分发可安装性」算功能主题**，须在构建/部署之前完成（三平台产物 + GitHub Release + 一个包管理器）。
-理由：没有可下载产物就没人试装，拿不到真实对抗语料，会反过来拖慢召回率验收与 PII Engineer ROI 判断。
 
-**B 组「最小分发」完成（2026-09-11 00:15）+ v0.1.0 实际发布（2026-09-11 20:xx）**：
+**B 组「分发可安装性」已全数闭环**：
 
 | 项 | 状态 | 入口 |
 |---|---|---|
 | 三平台交叉编译 | ✅ | `scripts/release.sh`（6 平台：5 原 + windows/arm64） |
-| GitHub Release 自动化 | ✅ | `.github/workflows/release.yml`（on `v*.*.*` tag push → 用 CI `GITHUB_TOKEN` 自动编译 + 建 Release + 上传产物，绕开本地无 gh/token 限制） |
-| 一个包管理器 | ✅ | `scoop-bucket/llmate-gate.json`（windows amd64 + arm64 双入口，hash 已更新） |
-| 桌面托盘 | ✅ | 走系统原生（计划任务/systemd/launchd + 桌面 LNK 指向 `_debug`），放弃 systray（CGO 与纯 Go 交叉编译冲突） |
+| GitHub Release 自动化 | ✅ | `.github/workflows/release.yml`（on `v*.*.*` tag push → CI 自动编译 + 建 Release + 上传产物） |
+| **v0.1.0 真发布** | ✅ **2026-09-15 确认** | https://github.com/Jzh-li/LLMate-Gate/releases/tag/v0.1.0 ，7 assets |
+| 包管理器 | ✅ | `scoop-bucket/llmate-gate.json`（Windows）；Homebrew tap 未建（见 §5） |
+| 桌面集成 | ✅ | 走系统原生（计划任务/systemd/launchd + 桌面 LNK 指向 `_debug`） |
 
-**v0.1.0 发布物**：
-- tag `v0.1.0` 已打 + 推送（指向 commit `cd36ced`）
-- 本地二进制已验证：6 平台产物在 `C:/Users/jzh-l/AppData/Local/Temp/lmgate/dist/`（SHA256SUMS 同目录）
-- CI 在 tag 推送后自动编译并创建 GitHub Release（私有仓，需用户在 GitHub Actions 页确认）
-- **已知小瑕疵**：`scoop-bucket` 的 `post_install` 调用 `llmate-gate.exe --version`，但 `main.go` 未实现该 flag（仅 `-config/-no-debug/-listen`），scoop 安装时该步会报非致命错误；建议后续给 main.go 加 `--version` flag（非阻塞）
+**v0.1.0 发布纠正（此前记录有误，以此为准）**：
+- tag `v0.1.0` 现已 force-update 指向 **`a32cec1`**（原指向 `cd36ced`，那时 release.yml 尚未修复）
+- 仓已于 2026-09-12 晚切 **public**，anonymous 可 clone / 可下产物
+- **此前记录的「已知小瑕疵 --version 未实现」已闭环**：`6b922ac` 已加该 flag
 
-详细任务卡见 `.workbuddy/TODO_QUEUE.md` 末段。
+**仍未启动（按用户拍板，非阻塞）**：Dockerfile / 服务端托管 / 域名 / K8s / 自动更新服务。
+
+详细任务卡见 `.workbuddy/TODO_QUEUE.md` 末段（gitignored）。
 
 ---
 
@@ -184,7 +262,7 @@ git -c safe.directory='*' push origin main
 
 | # | 指标 | 目标 | 现状 |
 |---|---|---|---|
-| 1 | 中文召回率 | ≥ 85% | **100%**（合成 240 条） |
+| 1 | 中文召回率 | ≥ 85% | **合成 100%**（240 条）；⚠️ **真对抗口径 61.1%**（见 §0 / §13.3） |
 | 2 | P99 延迟 | < 2s | **23ms** |
 | 3 | 安装到可用 | < 5min | **<30s**（14.6MB 单文件） |
 | 4 | 仿真替换 LLM 质量 | 无下降 | v1.1 范畴（已实现未默认启） |
@@ -231,19 +309,49 @@ git -c safe.directory='*' push origin main
 | 审计 schema | `gateway/internal/audit/audit.go` |
 | 审计端点 | `gateway/debug/handler.go::handleAudit` |
 | 面板代码 | `gateway/debug/assets/{index.html,app.js}` |
-| 独立仓 | `C:/Users/jzh-l/cn-pii-bench/` |
-| 今日会话日志 | `.workbuddy/memory/2026-09-10.md` |
-| 详细任务队列 | `.workbuddy/TODO_QUEUE.md` |
+| bench 子模块仓 | https://github.com/Jzh-li/cn-pii-bench （已 public） |
+| 主仓 | https://github.com/Jzh-li/LLMate-Gate （已 public） |
+| 发布页 | https://github.com/Jzh-li/LLMate-Gate/releases |
+| CI 页 | https://github.com/Jzh-li/LLMate-Gate/actions |
+| 会话日志 | `.workbuddy/memory/*.md`（**gitignored，仅本机可见**） |
+| 详细任务队列 | `.workbuddy/TODO_QUEUE.md`（**gitignored，仅本机可见**） |
 
 ---
 
-## 9. "上下文保留下來"承诺
+## 9. 上下文同步协议（跨会话 / 跨机器 / 跨账号）
 
-本文件 + `.workbuddy/TODO_QUEUE.md` + `.workbuddy/memory/2026-09-10.md` 三件齐全即视为完整交接。
-**任何账号、任何机器**在 `git pull origin main` 之后打开仓根即可立刻看到本 HANDOFF.md；
-`.workbuddy/memory/` 路径与约定一致，workbuddy 会自动读取，作为补充上下文。
+**关键前提**：`.workbuddy/` **整个目录被 gitignore**（`.gitignore` 第 36 行）。所以 memory 日志和 TODO_QUEUE **不会随 git 走**。
 
-如本会话被账号切换打断而**未推送**：`git stash` 当前改动 + `git -c safe.directory='*' push origin <branch>` 可挽救。
+三层记忆各自的可达范围：
+
+| 层 | 载体 | 同账号跨会话 | 同机器跨会话 | **跨机器 / 别人** |
+|---|---|---|---|---|
+| 云端 | 服务端自动注入 profile + 历史会话检索 | ✅ 自动 | ✅ 自动 | ❌ |
+| 用户级本地 | `~/.workbuddy/MEMORY.md` | ✅ | ✅ | ❌ |
+| 项目级本地 | `.workbuddy/memory/*.md` + `TODO_QUEUE.md` | ✅ | ✅ | ❌（gitignored） |
+| **仓内 tracked** | **`HANDOFF.md` / `PROGRESS.md` / `V1_READINESS.md` / `SPEC_ALIGNMENT.md` / `README.md` / `SECURITY.md` / `CONTRIBUTING.md` / `CODE_OF_CONDUCT.md`** | ✅ | ✅ | ✅ **唯一通道** |
+
+### ⇒ 跨机器 / 换账号 / 交给另一个 workbuddy 的唯一可靠动作
+
+```bash
+git -c safe.directory='*' pull origin main   # 或在别处 clone
+cat HANDOFF.md                               # 先读 §0 + §1 + §5
+```
+
+**本文件就是同步载体**。它必须始终反映最新状态——否则另一个 workbuddy 会读到过期信息。
+
+### 交接判定标准（三件齐全）
+
+1. **`HANDOFF.md`**（tracked）— 状态速览 + 任务队列 + 约束 + 收口记录
+2. **`PROGRESS.md`**（tracked）— 逐次任务总账
+3. `.workbuddy/TODO_QUEUE.md`（gitignored）— **仅本机补充**，缺失不影响跨机器交接
+
+### 若被打断而未推送
+
+```bash
+git -c safe.directory='*' stash
+git -c safe.directory='*' push origin <branch>
+```
 
 ---
 
@@ -275,3 +383,54 @@ git -c safe.directory='*' push origin main
 | CI 三道新门禁 | `9c59657` | ci.yml 新增 `lint` job（golangci-lint 官方 CLI）与 `perf` job（首跑自举生成 `gateway/bench_baseline.txt` 并回写，下轮起比对）；coverage job 加逐包门槛（12 包按实测基线-5pct 设卡）。spec §1.3 高线记 v1.1 目标 |
 
 > 至此 CI 门禁全部就位：verify(-race) / build / e2e / coverage(总计+逐包) / bench / bench-baseline / lint / perf / vuln 九个 job。
+
+## 13. 近期收口记录（2026-09-12 下午 → 09-15，CI 版本漂移 + 开源就绪）
+
+### 13.1 CI 版本漂移修复链（09-12 下午）
+
+| 症状 | 根因 | 修复 | commit |
+|---|---|---|---|
+| `golangci-lint` 红 | `go install @latest` 拉到 v2.13.2，要求 Go ≥1.26 | 改官方 action 并固定 v2.6.1 | `d26c9e6` |
+| `golangci-lint` 仍红 | action v6 **不支持** golangci-lint v2 | action v6 → v7 | `e655c78` |
+| Node 20 弃用警告 | action v7 仍 targeting Node 20（v9 才是 Node 24） | v7 → v9 | `d40a7e5` |
+| `govulncheck` 红 | 官方 `govulncheck-action@v1` 内部仍 `@latest`（pull v1.2.0，要求 Go ≥1.26） | 撤销官方 action，手动固定 `v1.1.4` | `d40a7e5` |
+| `govulncheck` 20 个可达漏洞 | Go 1.24.9 stdlib 又有新洞（fix 跨 1.24.11~1.25.13） | CI Go **1.24.9 → 1.25.13**（一刀全修） | `6acb124` |
+
+> 教训：**CI 里 `@latest` 是负债**；官方 action 也有 major version 边界（golangci-lint v2 必须配 action v7+，Node 24 要 v9）。
+
+### 13.2 开源就绪 B 路线（09-12 晚，用户全权授权）
+
+| 任务 | commit / 产物 |
+|---|---|
+| P0-1 scripts 去硬编码用户路径 | `8c6a237`：默认非 9P → 仓内 `.build/`；9P → `mktemp -d`；`LMGATE_BUILD` 可覆盖 |
+| P0-2 release.yml 升级 + dispatch | `fef6f73`：Go 1.25.13 + actions v6 + cache + `inputs.tag` |
+| P0-3/4 + P1-3 治理三件套 | `c794ae0`：`SECURITY.md` / `CONTRIBUTING.md` / `CODE_OF_CONDUCT.md` |
+| P1-1 真对抗语料 + 评估器 | submodule `ba68298`：28 条手写样本，**F1 = 0.7458** |
+| P1-2 install.sh dry-run | `a32cec1`：`--dry-run` + OS 错误信息补全 |
+| P0-5 README Quickstart | `a32cec1`：语言策略 + 5 分钟上手 + 真对抗性能置顶 |
+
+### 13.3 真对抗 F1 by-subset（`bench/reports/adversarial_20260912-195233.md`）
+
+| 子集 | F1 | 说明 |
+|---|---|---|
+| email / ip_address / phone | 1.0 | regex 覆盖完整 |
+| mixed (tool_call arguments) | 0.86 | 地址部分漏报 |
+| `zh_person_name` | **0.0** | **regex 引擎未覆盖中文姓名** |
+| `zh_address` | **0.0** | **regex 引擎未覆盖中文地址** |
+| id_card_masked | 0.0 | `********` 遮蔽格式已知弱项 |
+| **总** | **0.7458** | P=0.9565 / R=0.6111 / p99=24ms |
+
+> **诚实原则**：合成语料 F1=1.0 是过拟合基线（生成器按 detector 算法写样本），已在 README 降为参考；真对抗 0.7458 才是对外宣称值。
+
+### 13.4 发布闭环（09-15）
+
+- 仓切 **public**（用户操作，Settings → Danger Zone → Make public）
+- `v0.1.0` tag **force-update** `cd36ced` → `a32cec1` → release workflow 重跑
+- ✅ Release 页产出 **7 assets**：6 平台二进制 + `SHA256SUMS`
+- ✅ CI 9 job 全绿
+
+### 13.5 遗留
+
+- 🔴 Linux/macOS `install.sh` 真机冒烟未做（见 §5）
+- ⚪ issue/PR 模板未加（可选）
+- ⚪ Homebrew tap 未建（可选）

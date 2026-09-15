@@ -4,12 +4,12 @@
 
 ---
 
-## 0. 当前状态速览（2026-09-15 17:40 更新）
+## 0. 当前状态速览（2026-09-15 19:45 更新）
 
 | 项 | 状态 |
 |---|---|
 | **仓可见性** | ✅ **public**（2026-09-12 晚切公开，anonymous 可 clone） |
-| **HEAD** | `a32cec1`，工作树干净，已推 origin/main |
+| **HEAD** | `17f4609`，工作树干净，已推 origin/main |
 | **Release** | ✅ **v0.1.0 已真发布**：https://github.com/Jzh-li/LLMate-Gate/releases/tag/v0.1.0 （7 assets = 6 平台二进制 + SHA256SUMS） |
 | **CI** | ✅ 9 job 全绿（verify(-race) / build / e2e / coverage / bench / bench-baseline / lint / perf / vuln） |
 | **合成语料 F1** | 1.0000（240 条中文 + 180 条英文）——过拟合基线，**不是**对外宣称值 |
@@ -339,6 +339,31 @@ cat HANDOFF.md                               # 先读 §0 + §1 + §5
 ```
 
 **本文件就是同步载体**。它必须始终反映最新状态——否则另一个 workbuddy 会读到过期信息。
+
+### 若确实要把 `.workbuddy/` 整体搬到另一台机器
+
+默认**不需要**——`.workbuddy/` 是会话日志 + 任务队列，本文件才是交接载体。
+但若要连日志一起搬，体积很小（本项目约 112KB），打包拷贝即可：
+
+```bash
+# 旧机器：打包
+tar -czf workbuddy-sync.tar.gz .workbuddy/
+
+# 新机器：解压到「用 WorkBuddy 打开的那个文件夹」下
+tar -xzf workbuddy-sync.tar.gz -C <工作区根>
+```
+
+要点：
+
+| 项 | 说明 |
+|---|---|
+| 放置位置 | `.workbuddy/` 必须在**工作区根**，不一定是仓库根。若打开的是上层目录，就该放上层（如小智项目：`_xiaozhi_workspace/.workbuddy/` 而仓库在 `_xiaozhi_workspace/myxiaozhi/`） |
+| 覆盖行为 | WorkBuddy 首次打开项目会自动建 `.workbuddy/`；直接合并覆盖，不会冲突 |
+| 用户级记忆 | `~/.workbuddy/MEMORY.md` 与 `~/.workbuddy/skills/` **不随项目走**，需单独拷到新机器的对应路径 |
+| 验证 | 新机器上问「读 `.workbuddy/memory/MEMORY.md`，列出项目硬规则」，能答出 = 成功 |
+
+> ⚠️ **禁止**把 `.workbuddy/` 提交进本仓——**本仓是 public，任何分支都公开可读**。
+> 若真要让它随 git 走，只能另建一个 **private** 仓（勿在 public 仓开分支）。
 
 ### 交接判定标准（三件齐全）
 

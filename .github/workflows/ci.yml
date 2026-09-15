@@ -21,7 +21,13 @@ env:
 #   - 新增 lint（golangci-lint）job：gateway/.golangci.yml 保守规则集，本地已清零
 #   - 新增 perf job：Go benchmark（detector/cache/vault/replacer 热路径）
 #     + scripts/bench-guard.sh 回退守门（min-of-6 ns/op，容差 1.25×）
-# 门禁已全部就位。
+#
+# ✅ 2026-09-15 补齐「跑不起来的守门」：
+#   - bench 加 `validate.py --all`（三语料；重复样本为 hard error）+ 评估器自检
+#   - 新增 bench-gate：起真实网关，跑 L2 泄漏级 + 真对抗阈值守门（端到端）
+#   动机：此前 L2 载体守门与真对抗语料**从未在 CI 里跑过**，
+#   「一个不跑的守门等价于没有守门」——L2 的 30 条 regression 就是这样长期被忽略的。
+#   详见 Specs/06 的 B-15 / B-16 / B-18。
 
 jobs:
   verify:
@@ -182,10 +188,93 @@ jobs:
           submodules: true
 
       # 不引入 setup-python：runner 自带 python3 足够，少一个 Node20 action 依赖
-      - name: 校验 cn-pii-bench fixture
+      # --all：三语料（cases / cases_en / cases_adversarial）全查。
+      # 重复样本是 **hard error**：同一句话换几个数字批量灌出来的语料会把指标系统性
+      # 做虚，必须挡住而不是仅告警。
+      - name: 校验 cn-pii-bench fixture（三语料）
         run: |
           python3 -V
-          python3 bench/validate.py
+          python3 bench/validate.py --all
+
+      # 评估器自身的自检：正确实现 → 0 失败；故意漏实现 → 必须报出大量失败。
+      # 没有这一步就无法区分「评估器是瞎的」与「实现是对的」。
+      - name: 评估器自检
+        run: |
+          python3 bench/runner.py --selftest
+          python3 bench/carriers.py --selftest --limit 40
+
+  bench-gate:
+    name: bench gate (L2 泄漏级 + 真对抗阈值)
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: gateway/go.sum
+
+      # 这是**端到端**守门：前面的 bench / bench-baseline 只跑进程内引擎，
+      # 打不到「同一段文本出现在同一请求的多个字段」这类载体相关的缺陷
+      # （历史上 L2 守门报出的 30 条 regression 正属此类）。
+      - name: 构建网关
+        working-directory: gateway
+        run: CGO_ENABLED=0 go build -o "${RUNNER_TEMP}/llmate-gate" ./cmd/llmate-gate
+
+      - name: 启动网关并等待就绪
+        working-directory: gateway
+        run: |
+          "${RUNNER_TEMP}/llmate-gate" --config configs/bench-gate.yaml --listen :8401 \
+            > "${RUNNER_TEMP}/gateway.log" 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -fsS -m 2 http://127.0.0.1:8401/healthz > /dev/null 2>&1; then
+              echo "网关就绪（第 ${i} 次探测）"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "FAIL: 网关 30s 内未就绪，日志："
+          cat "${RUNNER_TEMP}/gateway.log"
+          exit 1
+
+      # L2 泄漏级：脱敏后的载荷里 PII 原串是否还活着（比 span 级更敏感）。
+      # 口径是「相对 flat 基线 0 regression + 往返 0 失败 + 0 请求错误」。
+      # ⚠️ 不带 --limit：子集采样会让整类缺陷不可见（银行卡曾因此长期隐身）。
+      - name: L2 载体对等性守门
+        run: |
+          python3 bench/carriers.py \
+            --base-url http://127.0.0.1:8401 \
+            --out "${RUNNER_TEMP}/bench-reports" \
+            --gate
+
+      # 真对抗阈值守门。阈值放在这里而不是脚本里，是为了让「当前承诺的底线」
+      # 在 review 中显式可见。基线（2026-09-15）：P=1.0000 R=0.6216 F1=0.7667。
+      # 精确率门槛压得很高：误报会改写正常对话内容，比漏检更容易被用户察觉。
+      # 召回率低是**已声明的设计边界**（弱格式实体依赖 NER sidecar），
+      # 所以只防回归、不设理想值。
+      - name: 真对抗阈值守门
+        run: |
+          python3 bench/bench_runner_adversarial.py \
+            --endpoint http://127.0.0.1:8401/v1/privacy/redact \
+            --out "${RUNNER_TEMP}/bench-reports" \
+            --report \
+            --min-precision 0.99 \
+            --min-recall 0.60
+
+      - name: 上传 bench 报告
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: bench-gate-reports
+          path: ${{ runner.temp }}/bench-reports
+          if-no-files-found: warn
 
   bench-baseline:
     name: bench baseline (真实引擎召回)

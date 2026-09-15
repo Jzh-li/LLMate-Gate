@@ -1,0 +1,50 @@
+# Bench 守门配置（CI 用）：内部 regex 检测器，只打本地隐私 API。
+#
+# 为什么不需要 mock 上游：本守门只跑 `/v1/privacy/redact` 与 `/v1/privacy/restore`
+# （`cn-pii-bench` 的 `carriers.py` 与 `bench_runner_adversarial.py`），
+# 不经过 LLM 转发链路，所以 `gateway.upstream` 只需是合法 URL，无需可达。
+#
+# ⚠️ 这里的 thresholds 与 vault/policy 是一份**度量口径**，改动它会直接改变
+# `Specs/05` §10 记录的基线数字。若确要改，必须同步更新 §10 与 CI 里的阈值。
+gateway:
+  listen: ":8401"
+  upstream: "http://127.0.0.1:8999"
+  auth_token: ""
+  upstream_api_key: "bench-no-auth"
+  request_timeout: "10s"
+  # debug=true 让 /_api/detect 可用（不跑 L1 时也无害）
+  debug: true
+  log_level: "info"
+
+detection:
+  engine: "regex"
+  fallback_regex: true
+  thresholds:
+    zh_person_name: 0.5
+    zh_phone: 0.8
+    zh_id_card: 0.9
+    email: 0.7
+  cache:
+    enabled: true
+    bind_conversation: true
+    ttl: "5m"
+    max_entries: 1000
+
+replacement:
+  strategy: "placeholder"
+  irreversible: []
+
+policy:
+  fail_closed: true
+  tool_call_scan: true
+  stream_restore: true
+
+vault:
+  path: "./vault_data_bench"
+  encryption: "aes-256-gcm"
+  key_derivation: "scrypt"
+  request_ttl: "30m"
+  persist: false
+
+audit:
+  enabled: false

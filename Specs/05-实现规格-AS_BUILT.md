@@ -1,8 +1,9 @@
 # LLMate Gate 实现规格（AS-BUILT）
 
-> **文档版本**：v1.1（2026-09-15）
+> **文档版本**：v1.2（2026-09-15）
 > **层级**：L2-AsBuilt（实现现状规格）
-> **取证基线**：`origin/main @ 185f159`（v1.0 取证于 `c64f246`；v1.1 增补第 6 批缺陷修复）
+> **取证基线**：`origin/main @ 8bb0dbb`（v1.0 取证于 `c64f246`；v1.1 增补第 6 批缺陷修复；
+> v1.2 增补 §9.1 的 `bench-gate` 守门与子模块锚点约定）
 > **取证方法**：全量 `git log`（92 commit）+ 逐包读源码 + 本机实际编译运行验证。
 > **核心规则**：**本文档以代码为唯一事实来源。** 任何与 `HANDOFF.md` / `Specs/00` 冲突之处，以本文档为准；本文档与代码冲突时，以代码为准并回来更新本文档。
 > **不回答的问题**：为什么这样设计（见 `Specs/00`）、原始排期（见 `Specs/01`）。
@@ -540,9 +541,30 @@ sample_text
 
 ## 9. 质量门禁与测试
 
-### 9.1 CI（9 个 job）
+### 9.1 CI（10 个 job）
 
-`verify`（vet + `go test -race`）/ `build` / `e2e`（E1-E8）/ `ui-smoke`（D1-D6）/ `coverage`（总门槛 + 逐包门槛）/ `bench`（fixture 校验）/ `bench-baseline`（真实引擎召回）/ `lint`（golangci-lint，8 个 linter，0 issues）/ `perf`（8 个 Go benchmark，min-of-6，容差 1.25×）/ `vuln`（govulncheck）。
+| job | 内容 |
+|---|---|
+| `verify` | vet + `go test -race` |
+| `build` | 交叉编译冒烟 |
+| `e2e` | E1-E8（契约级） |
+| `ui-smoke` | D1-D6（面板） |
+| `coverage` | 总门槛 + 逐包门槛 |
+| `bench` | 三语料结构校验（`validate.py --all`，重复**硬错**）+ 评估器自检 |
+| **`bench-gate`** | **起真实网关 → L2 泄漏级守门 + 真对抗阈值守门**（端到端） |
+| `bench-baseline` | 进程内真实引擎召回（`cmd/bench-runner`） |
+| `lint` | golangci-lint，8 个 linter，0 issues |
+| `perf` | 8 个 Go benchmark，min-of-6，容差 1.25× |
+| `vuln` | govulncheck |
+
+**`bench-gate` 补的是「跑不起来的守门」**：此前 L2 载体守门与真对抗语料**从未在 CI 里执行过**，
+只有进程内引擎的召回基线。而历史上 L2 报出的 30 条 regression 恰恰属于
+「同一段文本出现在同一请求的多个字段」这类只有端到端才测得到的缺陷。
+新增 job 的配置与阈值见 `gateway/configs/bench-gate.yaml` 与 `.github/workflows/ci.yml`。
+
+**子模块**：`bench/` 指向 `cn-pii-bench`，`.gitmodules` 声明 `branch = main`。
+CI 用 `submodules: true` 按**父仓记录的 SHA** 检出（不受 `branch` 影响），
+所以每次改动 bench 侧脚本或语料后，**必须同步更新父仓的锚点**，否则 CI 测的还是旧数据。
 
 Go 版本：`GO_VERSION: '1.25.13'`（CI 权威口径；`gateway/go.mod` 声明 `go 1.24`）。
 
@@ -572,6 +594,14 @@ python3 carriers.py --base-url http://127.0.0.1:8413      # 不带 --limit，跑
 
 > **不要加 `--limit`。** 子集采样会整类地掩盖缺陷：`--limit 60` 恰好只取到
 > `person_name` + `phone`，银行卡一条不进样本（`Specs/06` B-16）。
+
+守门模式（供 CI，退出码 2 即未通过）：
+
+```bash
+python3 carriers.py --base-url http://127.0.0.1:8413 --gate
+python3 bench_runner_adversarial.py --endpoint http://127.0.0.1:8413/v1/privacy/redact \
+  --report --min-precision 0.99 --min-recall 0.60
+```
 
 判读顺序：**先看 L2 载体 regression 是否为 0**（泄漏级，最敏感，能抓到 span 级指标看不见的泄漏），再看真对抗 P/F1，最后才看合成语料（自作者语料 F1=1.0 只说明「检测器与生成器口径一致」，不构成结论）。
 
@@ -727,7 +757,7 @@ python3 carriers.py --base-url http://127.0.0.1:8413      # 不带 --limit，跑
 
 | 项 | `HANDOFF.md`（旧） | 代码实际 |
 |---|---|---|
-| HEAD | `17f4609` | `185f159`（本文档重建时） |
+| HEAD | `17f4609` | `8bb0dbb`（本文档更新时） |
 | Go 版本 | 1.24.5 | CI `1.25.13`，go.mod `1.24` |
 | dev loop 路径 | WSL 9P (`//wsl.localhost/...`) + Windows NTFS scratch | 原生 Linux 直接仓内构建；WSL 描述已不适用 |
 | 功能覆盖 | 停在 09-12（无 registry / 词典 / 身份卡 / 多上游 / bypass） | 这些均已实现并接线 |

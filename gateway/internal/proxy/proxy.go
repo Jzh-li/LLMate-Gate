@@ -769,6 +769,9 @@ func statusForCode(c gatewayerrors.Code) int {
 		return http.StatusBadRequest
 	case gatewayerrors.CodeUnauthorized:
 		return http.StatusUnauthorized
+	case gatewayerrors.CodeNotFound:
+		// 映射表不存在 / 已过期 / 不属于本调用面，对外统一 404（契约 §7.3）。
+		return http.StatusNotFound
 	case gatewayerrors.CodeDetectorTimeout, gatewayerrors.CodeCircuitOpen, gatewayerrors.CodeUpstreamError:
 		return http.StatusBadGateway
 	default:

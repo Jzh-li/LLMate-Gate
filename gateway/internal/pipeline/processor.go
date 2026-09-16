@@ -179,8 +179,25 @@ func (p *Processor) NewSession() *replacer.Session {
 	return p.repl.NewSession()
 }
 
-// Store 把一次请求的全部映射条目写入 vault（按 RequestID 还原）。
+// Store 写入一次「数据面」请求的映射表；仅供该请求自身的响应还原使用。
+//
+// 数据面的 request_id 来自客户端指定的 X-Request-ID（见 proxy.requestID），因此
+// 这个命名空间对外是**半公开**的——同一台机器上的另一个客户端可能从日志/自身配置里
+// 见到它。Origin=OriginData 保证这类表不会被控制面 API 还原。
 func (p *Processor) Store(reqID, convID string, entries []types.MappingEntry) error {
+	return p.store(reqID, convID, types.OriginData, entries)
+}
+
+// StoreControl 写入一次「控制面」/v1/privacy/redact 的映射表，允许后续经
+// /v1/privacy/restore 还原。
+//
+// 与控制面自建 ID（proxy.newRequestID，128 位随机）配套：ID 不可猜 + 来源可校验，
+// 两个条件都成立才还原得出原文。
+func (p *Processor) StoreControl(reqID, convID string, entries []types.MappingEntry) error {
+	return p.store(reqID, convID, types.OriginControl, entries)
+}
+
+func (p *Processor) store(reqID, convID, origin string, entries []types.MappingEntry) error {
 	if len(entries) == 0 {
 		return nil
 	}
@@ -189,12 +206,33 @@ func (p *Processor) Store(reqID, convID string, entries []types.MappingEntry) er
 		ConversationID: convID,
 		Entries:        entries,
 		CreatedAt:      time.Now(),
+		Origin:         origin,
 	}
 	if err := p.vault.Put(tbl); err != nil {
 		return gatewayerrors.Wrap(gatewayerrors.CodeVaultSealFailed, "store mapping", err)
 	}
 	if p.m != nil {
 		p.m.VaultSize.Set(float64(p.vault.Len()))
+	}
+	return nil
+}
+
+// AssertRestorableViaAPI 校验 request_id 对应的映射表允许经控制面 API 还原。
+//
+// 存在的意义是把「按 ID 取原文」的权限从「知道 ID」抬高到「ID 由控制面产生」。
+// 在此之前，任何持有控制面令牌的调用方只要拿到另一个请求的 request_id（数据面的
+// 那个是客户端可指定的），就能还原出它的原文——一条与「谁能调网关」无关的越权读路径。
+//
+// 失败一律返回 not_found，不区分「不存在」「已过期」「属于别的调用面」：
+// 区分开就等于提供了一个「这个 ID 是否存在」的探针，而调用方本来就不该知道别人
+// 的 ID 空间长什么样。
+func (p *Processor) AssertRestorableViaAPI(reqID string) error {
+	tbl, err := p.vault.Get(reqID)
+	if err != nil {
+		return err
+	}
+	if !tbl.IsRestorableViaAPI() {
+		return gatewayerrors.ErrNotFound
 	}
 	return nil
 }

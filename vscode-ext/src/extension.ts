@@ -198,6 +198,16 @@ function disable(): void {
   vscode.window.showInformationMessage("LLMate Gate 已停用。");
 }
 
+// panelTokenQuery 返回面板 URL 的令牌查询串（`?token=...`，未配置令牌时为空串）。
+//
+// 面板的数据接口能看到请求明文与登记表，因此归控制面。浏览器无法在页面请求上携带
+// Authorization 头，所以令牌走一次性的 ?token= —— 后端校验通过后换成 HttpOnly Cookie
+// 并 302 回不带查询串的地址。
+function panelTokenQuery(): string {
+  const auth = cfg<string>("authToken", "").trim();
+  return auth ? `?token=${encodeURIComponent(auth)}` : "";
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   output = vscode.window.createOutputChannel("LLMate Gate");
   statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -207,7 +217,11 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("llmateGate.enable", () => void enable()),
     vscode.commands.registerCommand("llmateGate.disable", () => disable()),
     vscode.commands.registerCommand("llmateGate.openDashboard", () => {
-      vscode.env.openExternal(vscode.Uri.parse(`${gatewayUrl()}/_debug`));
+      // 带上令牌：面板的数据接口归控制面，首次访问需要 ?token= 换取面板 Cookie。
+      // 单令牌部署（未配 gateway.control_auth_token，控制面回退数据面令牌）下这里就能
+      // 直接打开；配了独立控制面令牌时这个令牌无效，面板会弹出输入框让人粘控制面令牌。
+      const url = `${gatewayUrl()}/_debug${panelTokenQuery()}`;
+      vscode.env.openExternal(vscode.Uri.parse(url));
     }),
     statusBar
   );

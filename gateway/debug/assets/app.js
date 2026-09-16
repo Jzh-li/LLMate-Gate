@@ -41,6 +41,49 @@
     return ms + " ms";
   }
 
+  // ----- 鉴权 -----
+  // 面板的数据端点（/_api/*、/ws/events）走控制面令牌：它们能读到请求明文，与
+  // /v1/privacy/* 是同一种能力。浏览器在 fetch / WebSocket 上都不会带 Authorization
+  // 头，所以凭据以 HttpOnly Cookie 的形式由 /_debug?token=<令牌> 一次性下发，
+  // 后端在之后每个请求上校验。前端读不到也不需要读它。
+  //
+  // 这里只负责一件后端做不了的事：401 时告诉用户「怎么拿到凭据」。没有这一步，
+  // 面板会表现为静默空白——最难排查的一种失败。
+  function authHint() {
+    let el = $("#authHint");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "authHint";
+      el.style.cssText =
+        "position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:99;" +
+        "background:var(--panel,#1b1f27);border:1px solid var(--border,#333);border-radius:8px;" +
+        "padding:18px 22px;max-width:560px;font-size:13px;line-height:1.7;box-shadow:0 8px 32px rgba(0,0,0,.5);";
+      el.innerHTML =
+        "<b>面板需要令牌</b><br>" +
+        "本面板会显示请求明文，因此数据接口走控制面令牌。" +
+        "<br>令牌见网关启动日志，或 <code>auth_token</code> 文件。粘贴后继续：" +
+        '<div style="margin-top:10px;display:flex;gap:8px;">' +
+        '<input id="authHintInput" type="password" placeholder="控制面令牌" autocomplete="off" ' +
+        'style="flex:1;padding:6px 8px;background:transparent;border:1px solid var(--border,#333);' +
+        'border-radius:4px;color:inherit;font-family:inherit;">' +
+        '<button id="authHintGo" class="btn">确定</button></div>';
+      document.body.appendChild(el);
+      const go = () => {
+        const v = $("#authHintInput").value.trim();
+        if (!v) return;
+        // 交给后端换成 Cookie 并 302 回不带查询串的地址，令牌不进历史记录。
+        location.href = "/_debug?token=" + encodeURIComponent(v);
+      };
+      $("#authHintGo").addEventListener("click", go);
+      $("#authHintInput").addEventListener("keydown", (e) => { if (e.key === "Enter") go(); });
+    }
+    el.style.display = "block";
+  }
+  function hideAuthHint() {
+    const el = $("#authHint");
+    if (el) el.style.display = "none";
+  }
+
   // ----- Tabs -----
   $$(".tab").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -87,7 +130,9 @@
   async function refreshTraffic() {
     try {
       const resp = await fetch("/_api/traffic", { headers: { "Accept": "application/json" } });
+      if (resp.status === 401) { authHint(); return; }
       if (!resp.ok) return;
+      hideAuthHint();
       const data = await resp.json();
       state.records = (data.records || []).filter((r) => r && r.request_id);
       renderList();

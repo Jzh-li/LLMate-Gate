@@ -183,8 +183,11 @@ func (p *Proxy) PrivacyRedact(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 整段递归脱敏统一在会话里累积映射条目；生成一次 request_id 并落盘，供后续 restore 还原。
+	//
+	// 用 StoreControl 而不是 Store：这是一张「调用方自己造、自己还原」的表，是唯一
+	// 允许经 /v1/privacy/restore 还原的来源。数据面的表走 Store，永不出现在这个 API 里。
 	reqID := newRequestID()
-	if err := p.proc.Store(reqID, req.ConversationID, sess.Entries()); err != nil {
+	if err := p.proc.StoreControl(reqID, req.ConversationID, sess.Entries()); err != nil {
 		writeError(w, gatewayerrors.Wrap(gatewayerrors.CodeVaultSealFailed, "store mapping", err))
 		return
 	}
@@ -256,6 +259,10 @@ func (p *Proxy) handleGateOnly(w http.ResponseWriter, r *http.Request, req *priv
 // 递归遍历 JSON / 文本，对每个字符串调用 pipeline.Restore（底层按 sentinel 从 vault 取原文，
 // 失败 fail-safe 保留占位符不报错）。一次 redact 的映射表全局共享，故同一 request_id 可跨
 // 多次调用还原。
+//
+// 只接受「由本 API 的 redact 建立」的映射表（见 AssertRestorableViaAPI）：这个 handler 的
+// 入参是一个纯文本 request_id，而数据面那张表的主键来自客户端可控的 X-Request-ID。
+// 不校验来源的话，持有控制面令牌就等于持有「按任意数据面 request_id 读原文」的能力。
 func (p *Proxy) PrivacyRestore(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -272,6 +279,16 @@ func (p *Proxy) PrivacyRestore(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.JSON) == 0 && req.Text == "" {
 		writeError(w, gatewayerrors.Wrap(gatewayerrors.CodeInvalidRequest, "empty", errEmptyPrivacyInput))
+		return
+	}
+	// 来源校验先于一切还原动作。放在这里（而不是各还原分支内部）是为了让「不可还原」
+	// 在 JSON / 文本两条路径上语义一致，也避免将来新增分支时漏掉。
+	//
+	// 直接透传错误而不重新包装：AssertRestorableViaAPI 对「不存在」「已过期」「不是控制面
+	// 建的表」统一返回 not_found，映射到 HTTP 404。「存在但你无权还原」若回 403，就等于
+	// 确认了这个 ID 真实存在。
+	if err := p.proc.AssertRestorableViaAPI(req.RequestID); err != nil {
+		writeError(w, err)
 		return
 	}
 

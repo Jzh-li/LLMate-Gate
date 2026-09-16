@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/url"
 	"os"
 	"os/signal"
@@ -264,6 +265,10 @@ func main() {
 	srv.SetMetricHandler(metricHandler)
 
 	// 挂载调试面板路由（debug=true 时；--no-debug 时 cfg.Gateway.Debug=false 已生效）。
+	//
+	// 面板挂到控制面 mux：它的数据端点（流量详情、Playground、登记表）都能看到明文
+	// PII，与 /v1/privacy/* 属于同一种能力，不该只需要数据面令牌。静态壳保持匿名——
+	// 壳里没有请求数据，而且没有它就没有地方输入令牌。
 	if cfg.Gateway.Debug {
 		dh := debug.NewHandler(debug.Options{
 			Config:      cfg,
@@ -275,8 +280,26 @@ func main() {
 			AuditSource: alog,
 			Registry:    piiReg,
 		})
-		dh.Mount(srv.Mux())
-		log.Printf("[llmate-gate] debug panel mounted at %s/_debug", cfg.Gateway.Listen)
+		dh.Mount(srv.ControlMux())
+		srv.AdoptDebugRoutes()
+		if authTok != "" {
+			log.Printf("[llmate-gate] debug panel at %s/_debug — it requires control-plane credentials "+
+				"(it shows request plaintext). Open %s/_debug?token=<token> once to set the panel cookie; "+
+				"the token is the control-plane token (see gateway.auth_token / auth_token_file).",
+				cfg.Gateway.Listen, cfg.Gateway.Listen)
+		} else {
+			log.Printf("[llmate-gate] debug panel mounted at %s/_debug (no authentication configured, loopback-only)",
+				cfg.Gateway.Listen)
+		}
+		// 面板的全部网络防线是「对端地址是不是回环」。这在同机反向代理后面会失效：
+		// 代理把 RemoteAddr 变成 127.0.0.1，于是面板跟着网关一起被暴露出去。
+		// 绑定非回环地址时明确说出来，而不是等用户自己发现。
+		if !isLoopbackListen(cfg.Gateway.Listen) {
+			log.Printf("[llmate-gate] SECURITY WARNING: debug panel enabled while listen=%q is not "+
+				"loopback-bound. The panel exposes request plaintext and the PII registry; its loopback "+
+				"check cannot see past a same-host reverse proxy. Bind to 127.0.0.1 or use --no-debug.",
+				cfg.Gateway.Listen)
+		}
 	} else {
 		log.Printf("[llmate-gate] debug panel disabled (--no-debug or config.debug=false)")
 	}
@@ -344,8 +367,24 @@ func logSecurityWarnings(cfg *config.Config, authTok string, generated bool) {
 	}
 }
 
-// loadRegistry 按配置装载登记表；未启用时返回 nil（Wrap 会原样返回内层检测器）。
+// isLoopbackListen 判断监听地址是否只绑回环。
 //
+// 空 host（如 ":8400"）表示所有网卡，按非回环处理——那正是需要警惕的情形。
+// 解析失败同样按非回环处理（fail-closed：宁可多打一条告警）。
+func isLoopbackListen(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	host = strings.Trim(host, "[]")
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// loadRegistry 按配置装载登记表；未启用时返回 nil（Wrap 会原样返回内层检测器）。//
 // 文件不存在视为空登记表：首次运行、或值全都由面板录入时就是这种状态。
 // 其余失败（读不了 / YAML 坏了 / 值不合规）一律 fatal —— 登记表是用户对「这些值
 // 一定会被脱敏」的承诺，带病启动等于悄悄毁约。

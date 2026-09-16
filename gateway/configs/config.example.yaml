@@ -19,7 +19,9 @@ gateway:
   #     给 hooks 的凭据不该同时具备「还原任意历史请求原文」的能力。留空则复用 auth_token。
   upstream_api_key: "${OPENAI_API_KEY}"  # 转发上游时使用的密钥，不透传客户端凭证
   request_timeout: "30s"
-  debug: true                            # 内嵌调试面板（--no-debug 可彻底关闭；面板恒为回环可访问）
+  debug: true                            # 内嵌调试面板（--no-debug 可彻底关闭）。
+                                         # 静态壳仅回环可达；数据接口 /_api/* 需控制面令牌，
+                                         # 首次用 http://127.0.0.1:8400/_debug?token=<令牌> 打开一次即可。
   log_level: "info"
 
   # 按协议声明的多上游（可选）。网关入口同时暴露 OpenAI 兼容

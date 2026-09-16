@@ -153,6 +153,13 @@ jobs:
       - name: UI 冒烟（D1-D6）
         run: timeout -k 5 420 ./e2e/ui_smoke.sh :8400
 
+      # 安全边界回归（S1-S6）。与上面两步同属「组装起来才成立」的行为验证，
+      # 因此复用同一个 job 里已构建的二进制；耗时只有几秒。
+      # 它守的是「边界还锁不锁得住」，e2e.sh / ui_smoke.sh 守的是「链路还通不通」——
+      # 一次把 auth 中间件挂错位置的改动可以让后者全绿、前者全红。
+      - name: 自身暴露面（S1-S6 鉴权 / 还原来源 / 调试面板）
+        run: timeout -k 5 180 ./e2e/security.sh
+
   coverage:
     name: coverage
     # 不写 needs: verify —— 见文件头「job 依赖」：门禁各自独立报结论。

@@ -357,6 +357,100 @@ func TestPrivacyRedact_GateOnly(t *testing.T) {
 	})
 }
 
+// TestPrivacyRestore_OriginIsolation 端到端锁定「控制面 API 不能还原数据面映射表」。
+//
+// 攻击场景（改动前成立）：调用方持有控制面令牌，知道另一个 LLM 请求的 X-Request-ID
+// （数据面的 ID 是客户端指定并回显的，日志里也常见），于是 POST /v1/privacy/restore
+// 带上那个 ID 和一个占位符，把对方被脱敏掉的原文取回来。
+//
+// 与「猜不到 ID」无关：这里刻意用一个已知的、格式合法的 ID，验证的是来源本身。
+func TestPrivacyRestore_OriginIsolation(t *testing.T) {
+	ctx := context.Background()
+	const (
+		victimID    = "victim-request-id-0001"
+		victimText  = "联系张三，手机 13800138000"
+		victimPhone = "13800138000"
+	)
+
+	// 造一张「数据面」映射表：等价于某个 LLM 请求经 gateway 转发时留下的表。
+	seedVictim := func(t *testing.T, px *Proxy) string {
+		t.Helper()
+		sess := px.proc.NewSession()
+		ents, err := px.proc.DetectText(ctx, "", victimText)
+		require.NoError(t, err)
+		require.NotEmpty(t, ents, "前置条件：该文本必须能检出 PII")
+		redacted, _, err := sess.Replace(victimText, ents)
+		require.NoError(t, err)
+		require.NotContains(t, redacted, victimPhone)
+		require.NoError(t, px.proc.Store(victimID, "", sess.Entries()))
+		return redacted
+	}
+
+	t.Run("数据面映射表：按已知 request_id 还原被拒且不泄漏原文", func(t *testing.T) {
+		px := newPrivacyTestProxy(t)
+		redacted := seedVictim(t, px)
+
+		req := newReqJSON("POST", "/v1/privacy/restore",
+			`{"request_id":"`+victimID+`","text":`+mustJSONString(t, redacted)+`}`)
+		rec := httptest.NewRecorder()
+		px.PrivacyRestore(rec, req)
+
+		require.Equal(t, http.StatusNotFound, rec.Code)
+		require.NotContains(t, rec.Body.String(), victimPhone, "原文不得出现在响应体")
+		require.NotContains(t, rec.Body.String(), "张三")
+	})
+
+	t.Run("控制面映射表：同一 request_id 走 redact 建立后可正常还原", func(t *testing.T) {
+		px := newPrivacyTestProxy(t)
+
+		req := newReqJSON("POST", "/v1/privacy/redact",
+			`{"text":`+mustJSONString(t, victimText)+`}`)
+		rec := httptest.NewRecorder()
+		px.PrivacyRedact(rec, req)
+		require.Equal(t, 200, rec.Code)
+
+		var redacted privacyRedactResp
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &redacted))
+		require.NotEmpty(t, redacted.RequestID)
+		require.True(t, redacted.Changed)
+
+		restore := newReqJSON("POST", "/v1/privacy/restore",
+			`{"request_id":"`+redacted.RequestID+`","text":`+mustJSONString(t, redacted.Text)+`}`)
+		rec2 := httptest.NewRecorder()
+		px.PrivacyRestore(rec2, restore)
+		require.Equal(t, 200, rec2.Code)
+
+		var restored privacyRestoreResp
+		require.NoError(t, json.Unmarshal(rec2.Body.Bytes(), &restored))
+		require.Contains(t, restored.Text, victimPhone)
+		require.Contains(t, restored.Text, "张三")
+	})
+
+	t.Run("未知 request_id 与越权 request_id 返回同一状态码", func(t *testing.T) {
+		px := newPrivacyTestProxy(t)
+		redacted := seedVictim(t, px)
+
+		attack := httptest.NewRecorder()
+		px.PrivacyRestore(attack, newReqJSON("POST", "/v1/privacy/restore",
+			`{"request_id":"`+victimID+`","text":`+mustJSONString(t, redacted)+`}`))
+
+		probe := httptest.NewRecorder()
+		px.PrivacyRestore(probe, newReqJSON("POST", "/v1/privacy/restore",
+			`{"request_id":"no-such-request-id-here","text":"<<PHONE_1>>"}`))
+
+		require.Equal(t, attack.Code, probe.Code,
+			"越权与不存在必须不可区分，否则 403/404 之差就是一个 ID 存在性探针")
+	})
+}
+
+// mustJSONString 把字符串编成 JSON 字面量（避免手写转义）。
+func mustJSONString(t *testing.T, s string) string {
+	t.Helper()
+	b, err := json.Marshal(s)
+	require.NoError(t, err)
+	return string(b)
+}
+
 func newReqJSON(method, target, body string) *http.Request {
 	r := httptest.NewRequest(method, target, strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")

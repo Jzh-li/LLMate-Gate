@@ -120,43 +120,53 @@ recordAudit（20 字段）→ /metrics 计数 → publish(restore.done)
 
 ### 2.1 路由全表
 
-来源：`internal/server/server.go:61-74`、`debug/handler.go:101-110`。
+来源：`internal/server/server.go`（`Handler` / `registerRoutes`）、`debug/handler.go:100-111`（`Mount`）。
 
-| 方法 | 路径 | 处理 | 备注 |
-|---|---|---|---|
-| POST | `/v1/chat/completions` | 代理 + 脱敏/还原 | OpenAI 协议 |
-| POST | `/v1/completions` | 同上 | |
-| POST | `/v1/embeddings` | 同上 | 请求侧脱敏 |
-| POST | `/v1/responses` | 同上 | OpenAI Responses API |
-| POST | `/v1/messages` | 同上 | **Anthropic 协议**，自动选 anthropic 上游 |
-| ANY | `/v1/models` | 纯透传 | 无需脱敏 |
-| GET | `/healthz` | 健康检查 | 检测器不可用时返回 503 `degraded` |
-| GET | `/metrics` | Prometheus | |
-| POST | `/v1/privacy/redact` | 递归脱敏 | **常驻隐私 API，不受 `--no-debug` 门控** |
-| POST | `/v1/privacy/restore` | 按 request_id 还原 | 同上 |
-| GET | `/_debug` `/_debug/*` | 调试面板 | 仅回环 |
-| GET | `/ws/events` | 面板实时事件 | 仅回环 |
-| POST | `/_api/traffic` | 流量查询 | 仅回环 |
-| POST | `/_api/detect` | 单段检测 | 仅回环 |
-| POST | `/_api/replace` | 试替换 | 仅回环 |
-| GET/POST | `/_api/rules` | 策略热切换 | 仅回环 |
-| GET/POST | `/_api/dictionary` | 仿真词典读写（热加载） | 仅回环 |
-| GET/POST | `/_api/registry` | 登记表读写（热加载） | 仅回环 |
-| GET | `/_api/audit` | 审计查询 | 仅回环 |
+| 方法 | 路径 | 处理 | 面 | 备注 |
+|---|---|---|---|---|
+| POST | `/v1/chat/completions` | 代理 + 脱敏/还原 | 数据面 | OpenAI 协议 |
+| POST | `/v1/completions` | 同上 | 数据面 | |
+| POST | `/v1/embeddings` | 同上 | 数据面 | 请求侧脱敏 |
+| POST | `/v1/responses` | 同上 | 数据面 | OpenAI Responses API |
+| POST | `/v1/messages` | 同上 | 数据面 | **Anthropic 协议**，自动选 anthropic 上游 |
+| ANY | `/v1/models` | 纯透传 | 数据面 | 无需脱敏 |
+| GET | `/healthz` | 健康检查 | 探针（匿名） | 检测器不可用时返回 503 `degraded` |
+| GET | `/metrics` | Prometheus | 数据面 | |
+| POST | `/v1/privacy/redact` | 递归脱敏 | 控制面 | **常驻隐私 API，不受 `--no-debug` 门控** |
+| POST | `/v1/privacy/restore` | 按 request_id 还原 | 控制面 | 同上；**只能还原控制面自建的表**（见下） |
+| GET | `/_debug`、`/_debug/*` | 调试面板静态壳 | **匿名 + 仅回环** | 壳内不含请求数据 |
+| WS | `/ws/events` | 面板实时事件 | 控制面 | |
+| GET/DELETE | `/_api/traffic` | 流量查询 / 清空 | 控制面 | |
+| POST | `/_api/detect` | 单段检测 | 控制面 | |
+| POST | `/_api/replace` | 试替换 | 控制面 | |
+| GET/PUT | `/_api/rules` | 策略热切换 | 控制面 | |
+| GET/PUT | `/_api/dictionary` | 仿真词典读写（热加载） | 控制面 | |
+| GET/PUT | `/_api/registry` | 登记表读写（热加载） | 控制面 | 返回明文 PII |
+| GET | `/_api/audit` | 审计查询 | 控制面 | |
 
-`/_api/*` 与 `/_debug` 全部经 `loopbackOnly` 包装（`debug/handler.go`）：即使网关监听了 `0.0.0.0`，面板也不对外。早期存在的 `debug_bind` 配置项已删除（`04982a8`），因为「可配置外部绑定」与「隐私网关」的定位冲突。
+`/_api/*`、`/_debug`、`/ws/events` 全部经 `loopbackOnly` 包装（`debug/handler.go`）：即使网关监听了 `0.0.0.0`，面板也不对外。早期存在的 `debug_bind` 配置项已删除（`04982a8`），因为「可配置外部绑定」与「隐私网关」的定位冲突。
+
+**面板的路由在 `debug=false` 时根本不注册**（`Server.AdoptDebugRoutes` 未被调用 → root 上没有这几条规则）→ 落到数据面 mux 的 404。刻意造成 404 而不是 401：否则「面板关掉了吗」会变成一个需要猜的问题。
+
+`/_debug` 走 `Server.panelBootstrap`：带 `?token=<有效令牌>` 时下发 `HttpOnly; SameSite=Strict` Cookie 并 302 回不带查询串的同一路径；不带该参数时原样交给下游渲染面板壳。`/_api/*` 与 `/ws/events` 走 `Server.panelAuthMiddleware`，在控制面令牌之外额外接受该 Cookie（`/v1/privacy/*` **不**接受 Cookie，保持最小权限）。
 
 ### 2.2 鉴权
 
-`server.go`。路由分三层，各自独立（`Server.Handler`）：
+`server.go`。路由分四层，各自独立（`Server.Handler`）：
 
 | 面 | 路径 | 令牌 |
 |---|---|---|
 | 探针 | `/healthz` | **不鉴权**（匿名可访问） |
 | 数据面 | `/v1/*`（LLM 转发）、`/metrics` | `gateway.auth_token` |
 | 控制面 | `/v1/privacy/redact`、`/v1/privacy/restore` | `gateway.control_auth_token`，留空回退数据面令牌 |
+| 控制面（面板） | `/_api/*`、`/ws/events` | 同控制面令牌，另接受面板 Cookie |
+| 控制面（面板壳） | `/_debug`、`/_debug/*` | **不鉴权** + 仅回环 |
 
 令牌解析在 `config.ResolveAuthToken`：`auth_token` 非空 → 用它；否则若 `allow_unauthenticated: true` → 不鉴权；否则读 `auth_token_file`（不存在则生成 32 字节随机令牌、`0600` 落盘、启动日志打印一次）。**空令牌只可能来自显式的 `allow_unauthenticated`。**
+
+**为什么面板数据端点归控制面**：它们能读到请求明文与登记表（用户自报的真实 PII 值），与 `/v1/privacy/*` 属于同一类能力，而数据面令牌的语义只是「可以转发」。改造前这些路径挂在数据面 mux 上。
+
+**为什么面板壳匿名**：壳（HTML/JS/CSS）不含任何请求数据；更重要的是它是「输入令牌」这个动作的载体——壳本身要凭据，第一次认证就无从完成。静态壳的暴露面只有面板本身的界面结构。
 
 接受两种凭证形式：`Authorization: Bearer <token>`、`X-Api-Key: <token>`，用 `crypto/subtle.ConstantTimeCompare` 比较。不匹配返回 401 + `{"error":{"code":"unauthorized","message":"missing or invalid credentials for <scope>"}}`。
 
@@ -177,6 +187,12 @@ recordAudit（20 字段）→ /metrics 计数 → publish(restore.done)
 `entities[].value`（命中原文）**默认不回显**，需要判定拦放时 `type` 已足够；要拿到原文需显式传 `include_values: true`。理由是默认回显会让网关同时成为一个「提交文本 → 取出其中 PII」的提取接口。
 
 返回 `request_id` 后，`/v1/privacy/restore` 可多次还原同一 `request_id`（映射表按 id 存放，不是一次性）。
+
+**还原的来源约束**：`restore` 只接受由 `redact` 建立的映射表。`Processor.Store`（数据面，`/v1/*` 转发）写 `origin="data"`，`Processor.StoreControl`（本 API）写 `origin="control"`；`Processor.AssertRestorableViaAPI` 在还原分支之前校验，`origin != "control"`（含空值）一律返回 `ErrNotFound` → **HTTP 404**。
+
+动机：`request_id` 在数据面来自客户端可指定的 `X-Request-ID`（`proxy.requestID` 只约束其**形状** `[A-Za-z0-9_-]{8,64}`，不约束来源）。不校验来源时，「知道一个 request_id」就等于「能读出那次请求被脱敏掉的原文」——一条绕过 vault 加密与 TTL 语义、也不经过内容审计的读取路径。
+
+拒绝统一为 404（与「不存在 / 已过期」不可区分）而不是 403：`403` 会确认该 ID 真实存在，等于提供一个存在性探针。
 
 ---
 

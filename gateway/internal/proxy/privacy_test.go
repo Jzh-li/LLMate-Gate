@@ -24,7 +24,7 @@ import (
 // 不启 HTTP 服务、不挂路由——只复用其内部组件。
 func newPrivacyTestProxy(t *testing.T) *Proxy {
 	t.Helper()
-	v, err := vault.NewMemVault(testTTL, []byte("unit-test-passphrase"), false, "")
+	v, err := vault.NewMemVault(testTTL, []byte("unit-test-passphrase"))
 	require.NoError(t, err)
 	det := detector.NewRegexEngine()
 	repl := replacer.New(replacer.Config{
@@ -280,6 +280,60 @@ func TestPrivacyRedact_GateOnly(t *testing.T) {
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 		require.True(t, resp.HasPII)
 		require.False(t, resp.Blocked) // 命中 phone/person 但 block_types 仅 api_key → 不 block
+	})
+
+	t.Run("默认不回显命中原文，include_values=true 才回显", func(t *testing.T) {
+		// 默认必须关：只要它默认开着，网关就同时是一个「提交文本 → 拿到其中 PII 原文」
+		// 的提取接口。而 hooks 判定「拦还是放」只需要 type，不需要原文。
+		px := newPrivacyTestProxy(t)
+		req := newReqJSON("POST", "/v1/privacy/redact", `{
+			"text": "联系张三，手机 13800138000",
+			"gate_only": true
+		}`)
+		rec := httptest.NewRecorder()
+		px.PrivacyRedact(rec, req)
+		require.Equal(t, 200, rec.Code)
+
+		var resp struct {
+			HasPII   bool `json:"has_pii"`
+			Entities []struct {
+				Type  string `json:"type"`
+				Value string `json:"value"`
+			} `json:"entities"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+		require.True(t, resp.HasPII)
+		require.NotEmpty(t, resp.Entities)
+		for _, e := range resp.Entities {
+			require.Empty(t, e.Value, "默认响应不得含命中原文（type=%s）", e.Type)
+			require.NotEmpty(t, e.Type, "类型仍必须给出，否则调用方无法决定拦还是放")
+		}
+		// 注意：响应体的 text 字段是「入参原样回还」（gate_only 的语义就是只判不改），
+		// 其中的原文来自调用方自己提交的内容，不是新增泄漏。真正的泄漏点是
+		// entities[].value —— 它会把「检测到了什么」直接交出去，所以只钉那一处。
+		entsJSON, err := json.Marshal(resp.Entities)
+		require.NoError(t, err)
+		require.NotContains(t, string(entsJSON), "13800138000")
+		require.NotContains(t, string(entsJSON), "张三")
+
+		// 显式索取时才回显
+		req2 := newReqJSON("POST", "/v1/privacy/redact", `{
+			"text": "联系张三，手机 13800138000",
+			"gate_only": true,
+			"include_values": true
+		}`)
+		rec2 := httptest.NewRecorder()
+		px.PrivacyRedact(rec2, req2)
+		require.Equal(t, 200, rec2.Code)
+
+		var resp2 struct {
+			Entities []struct {
+				Value string `json:"value"`
+			} `json:"entities"`
+		}
+		require.NoError(t, json.Unmarshal(rec2.Body.Bytes(), &resp2))
+		require.NotEmpty(t, resp2.Entities)
+		require.NotEmpty(t, resp2.Entities[0].Value, "include_values=true 时应带回原文")
 	})
 
 	t.Run("无 PII 文本：has_pii=false", func(t *testing.T) {

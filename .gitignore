@@ -19,6 +19,8 @@ dist/
 target/
 vscode-ext/out/
 .build/
+# e2e/e2e.sh 的默认产物目录（未设 LMGATE_BUILD 时用它），不该入库
+/build/
 
 # Python 编译产物
 __pycache__/

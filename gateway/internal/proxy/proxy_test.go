@@ -48,7 +48,7 @@ func (f *flushingRecorder) Flush() {}
 
 func newTestProxy(t *testing.T) *testProxy {
 	t.Helper()
-	v, err := vault.NewMemVault(testTTL, []byte("unit-test-passphrase"), false, "")
+	v, err := vault.NewMemVault(testTTL, []byte("unit-test-passphrase"))
 	require.NoError(t, err)
 	det := detector.NewRegexEngine(detector.WithThresholds(map[string]float64{
 		"zh_person_name": 0.5, "zh_phone": 0.8,
@@ -257,7 +257,7 @@ func TestProxy_ProtocolRouting(t *testing.T) {
 	}))
 	t.Cleanup(anthropicSrv.Close)
 
-	v, err := vault.NewMemVault(testTTL, []byte("unit-test-passphrase"), false, "")
+	v, err := vault.NewMemVault(testTTL, []byte("unit-test-passphrase"))
 	require.NoError(t, err)
 	det := detector.NewRegexEngine(detector.WithThresholds(map[string]float64{
 		"zh_person_name": 0.5, "zh_phone": 0.8,
@@ -331,7 +331,7 @@ func TestProxy_TransparentAuth(t *testing.T) {
 	}))
 	t.Cleanup(up.Close)
 
-	v, err := vault.NewMemVault(testTTL, []byte("unit-test-passphrase"), false, "")
+	v, err := vault.NewMemVault(testTTL, []byte("unit-test-passphrase"))
 	require.NoError(t, err)
 	det := detector.NewRegexEngine(detector.WithThresholds(map[string]float64{
 		"zh_person_name": 0.5, "zh_phone": 0.8,
@@ -373,7 +373,7 @@ func (failDetector) Name() string                              { return "fail" }
 
 // TestProxy_FailClosed_Blocks fail_closed=true 时检测异常必须阻断（502）。
 func TestProxy_FailClosed_Blocks(t *testing.T) {
-	v, err := vault.NewMemVault(testTTL, []byte("unit-test-passphrase"), false, "")
+	v, err := vault.NewMemVault(testTTL, []byte("unit-test-passphrase"))
 	require.NoError(t, err)
 	repl := replacer.New(replacer.Config{
 		Strategy: "placeholder", Irreversible: []string{"api_key", "password", "token"},
@@ -500,7 +500,7 @@ func (c *countingDetector) count() int {
 // 上游直接把收到的（已脱敏）请求体原样回显，便于断言；同时捕获该 body。
 func newIncrementalProxy(t *testing.T) (*Proxy, *cache.MerkleCache, *countingDetector, func() string) {
 	t.Helper()
-	v, err := vault.NewMemVault(testTTL, []byte("unit-test-passphrase"), false, "")
+	v, err := vault.NewMemVault(testTTL, []byte("unit-test-passphrase"))
 	require.NoError(t, err)
 	det := &countingDetector{Client: detector.NewRegexEngine(detector.WithThresholds(map[string]float64{
 		"zh_person_name": 0.5, "zh_phone": 0.8,
@@ -607,7 +607,7 @@ func TestProxy_ResponsesAPI_Anonymize(t *testing.T) {
 // newTestProxyWithMetrics 构造一个带真实 Prometheus 指标的 *Proxy，专供指标集成测试。
 func newTestProxyWithMetrics(t *testing.T) (*testProxy, *metrics.Collectors, *prometheus.Registry) {
 	t.Helper()
-	v, err := vault.NewMemVault(testTTL, []byte("unit-test-passphrase"), false, "")
+	v, err := vault.NewMemVault(testTTL, []byte("unit-test-passphrase"))
 	require.NoError(t, err)
 	det := detector.NewRegexEngine(detector.WithThresholds(map[string]float64{
 		"zh_person_name": 0.5, "zh_phone": 0.8,
@@ -700,7 +700,7 @@ func TestProxy_MetricsIntegration(t *testing.T) {
 // 这条用例锁死 P1-6 的修复：指标值必须是「本请求的实际残留数」，而不是全局累计量。
 // 用独立 registry，因此 == 1 同时证明「没有把全局累计值灌进来」。
 func TestProxy_StreamOrphanMetric(t *testing.T) {
-	v, err := vault.NewMemVault(testTTL, []byte("unit-test-passphrase"), false, "")
+	v, err := vault.NewMemVault(testTTL, []byte("unit-test-passphrase"))
 	require.NoError(t, err)
 	det := detector.NewRegexEngine(detector.WithThresholds(map[string]float64{
 		"zh_person_name": 0.5, "zh_phone": 0.8,
@@ -744,7 +744,7 @@ func TestProxy_StreamOrphanMetric(t *testing.T) {
 
 // TestProxy_BufferedOrphanMetric 非流式路径同样要记残留（整包还原也可能卡在半截哨兵）。
 func TestProxy_BufferedOrphanMetric(t *testing.T) {
-	v, err := vault.NewMemVault(testTTL, []byte("unit-test-passphrase"), false, "")
+	v, err := vault.NewMemVault(testTTL, []byte("unit-test-passphrase"))
 	require.NoError(t, err)
 	det := detector.NewRegexEngine(detector.WithThresholds(map[string]float64{
 		"zh_person_name": 0.5, "zh_phone": 0.8,
@@ -778,5 +778,84 @@ func TestProxy_BufferedOrphanMetric(t *testing.T) {
 		"非流式路径的残留同样必须计入")
 }
 
+// ---------- 客户端可控标识的校验（Specs/07 阶段 A2）----------
+//
+// request_id 会成为 vault 映射表主键与调试面板索引键，conversation_id 会成为
+// Merkle 增量缓存的键。两者都是「客户端说什么就是什么」的直接入口，所以必须
+// 收敛到网关能约束的字符集——否则前者是可猜的还原通道，后者是跨会话漏检。
 
+// TestRequestID_HeaderValidation 客户端提供的 request_id 过白名单，不合规回退服务端随机值。
+func TestRequestID_HeaderValidation(t *testing.T) {
+	accept := []string{
+		"req-abc12345",
+		"trace_id_0001",
+		strings.Repeat("a", 64), // 上界
+		"aaaaaaaa",              // 下界（8）
+	}
+	for _, v := range accept {
+		r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+		r.Header.Set("X-Request-ID", v)
+		require.Equal(t, v, requestID(r), "合规值应原样采用：%q", v)
+	}
 
+	reject := []string{
+		"short",                 // 太短
+		strings.Repeat("a", 65), // 太长
+		"../../etc/passwd",      // 路径穿越样式
+		"req id 12345",          // 空格
+		"请求标识12345678",          // 非 ASCII
+		"req;rm -rf /",          // 特殊字符
+		"",                      // 空
+	}
+	for _, v := range reject {
+		r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+		if v != "" {
+			r.Header.Set("X-Request-ID", v)
+		}
+		got := requestID(r)
+		require.NotEqual(t, v, got, "不合规的 ID 不得进入 vault 键空间：%q", v)
+		require.Regexp(t, `^[0-9a-f]{32}$`, got, "回退值必须是服务端随机 hex：%q", v)
+	}
+}
+
+// TestRequestID_FallbackHeaderIsAlsoValidated 第二个候选头同样要过白名单。
+//
+// 只校验第一个头等于没校验：攻击者用第二个头就能绕过。
+func TestRequestID_FallbackHeaderIsAlsoValidated(t *testing.T) {
+	r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	r.Header.Set("X-Llmate-Request-Id", "good-req-id-1")
+	require.Equal(t, "good-req-id-1", requestID(r))
+
+	r2 := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	r2.Header.Set("X-Llmate-Request-Id", "bad")
+	require.Regexp(t, `^[0-9a-f]{32}$`, requestID(r2))
+}
+
+// TestRequestID_GeneratedValuePassesOwnPattern 服务端生成值必须能通过自己的白名单。
+//
+// 反身测试：若随机值的长度/字符集不满足校验规则，那么「上一次生成、下一次读回」
+// 这类路径会把自己的 ID 判为非法。
+func TestRequestID_GeneratedValuePassesOwnPattern(t *testing.T) {
+	require.True(t, requestIDPattern.MatchString(randHex(16)))
+}
+
+// TestConversationID_RejectsMalformed 会话 ID 是 Merkle 缓存键，不合规按「无会话」处理。
+//
+// 后果说明：两个不相干的会话若共用同一个 ID，后者的新增文本会被增量缓存判为
+// 「已扫过」而跳过检测——直接漏检。宁可退化成每次全量扫。
+func TestConversationID_RejectsMalformed(t *testing.T) {
+	r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	r.Header.Set("X-Conversation-ID", "conv-abc123")
+	require.Equal(t, "conv-abc123", conversationID(r))
+
+	for _, bad := range []string{"conv with spaces", "会话id", strings.Repeat("c", 65), "a/b"} {
+		rb := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+		rb.Header.Set("X-Conversation-ID", bad)
+		require.Empty(t, conversationID(rb), "不合规的会话 ID 必须按「无会话」处理：%q", bad)
+	}
+
+	// 单字符是合法的（会话 ID 短是常见写法）
+	rs := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	rs.Header.Set("X-Conversation-ID", "a")
+	require.Equal(t, "a", conversationID(rs))
+}

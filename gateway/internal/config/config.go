@@ -4,9 +4,12 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -29,14 +32,35 @@ type Config struct {
 
 // GatewayConfig 网关监听与上游配置。
 type GatewayConfig struct {
-	Listen         string           `yaml:"listen"`
-	Upstream       string           `yaml:"upstream"`
-	AuthToken      string           `yaml:"auth_token"`
-	UpstreamAPIKey string           `yaml:"upstream_api_key"`
-	Upstreams      []UpstreamConfig `yaml:"upstreams"`
-	RequestTimeout time.Duration    `yaml:"request_timeout"`
-	Debug          bool             `yaml:"debug"`
-	LogLevel       string           `yaml:"log_level"`
+	Listen    string `yaml:"listen"`
+	Upstream  string `yaml:"upstream"`
+	AuthToken string `yaml:"auth_token"`
+	// AuthTokenFile：auth_token 未配置时，网关自动生成的令牌存放位置。
+	//
+	// 为什么需要它：无鉴权 + 已配 upstream_api_key 意味着「任何能连到端口的人都能
+	// 用你的凭据调上游」，所以不能再让「忘写 auth_token」静默变成裸奔。但只把令牌
+	// 生成在内存里同样不行——每次重启换一个令牌，客户端要一直改配置，最后用户会
+	// 干脆关掉鉴权，反而更不安全。写成 0600 的文件是让默认安全与可用性同时成立的最
+	// 小代价：生成一次，之后重启复用。
+	AuthTokenFile string `yaml:"auth_token_file"`
+	// AllowUnauthenticated：显式声明「我知道本网关不鉴权，且接受」。
+	//
+	// 存在的意义是把「没配」与「明确不要」分开。本地基准测试、CI 守门这类场景确实
+	// 需要零鉴权（见 configs/bench-gate.yaml），但它们应当把这个意图写出来，而不是
+	// 依赖「auth_token 恰好为空」——否则同一个空值既表示「我还没配」也表示「我不要」，
+	// 网关无从区分，只能永远选择更弱的那个解释。
+	AllowUnauthenticated bool `yaml:"allow_unauthenticated"`
+	// ControlAuthToken：控制面（/v1/privacy/*，可还原原文）的独立令牌。
+	//
+	// 控制面能按 request_id 还原原文，数据面只是转发。两者权限级别不同：
+	// 给 Claude Code hooks 的数据面令牌不该同时具备「还原任意请求原文」的能力。
+	// 留空则回退到 auth_token（保持单令牌部署的兼容性）。
+	ControlAuthToken string           `yaml:"control_auth_token"`
+	UpstreamAPIKey   string           `yaml:"upstream_api_key"`
+	Upstreams        []UpstreamConfig `yaml:"upstreams"`
+	RequestTimeout   time.Duration    `yaml:"request_timeout"`
+	Debug            bool             `yaml:"debug"`
+	LogLevel         string           `yaml:"log_level"`
 }
 
 // UpstreamConfig 按协议路由的上游（各家厂商适配，配置驱动而非写死代码）。
@@ -141,6 +165,11 @@ type AuditConfig struct {
 	Path    string   `yaml:"path"`
 	Export  []string `yaml:"export"`
 	LogPII  bool     `yaml:"log_pii"`
+	// MaxSizeMB 单个审计文件大小上限（MiB），超过则轮转为 path.1 / path.2…；
+	// 0 表示关闭轮转。默认 100。
+	MaxSizeMB int `yaml:"max_size_mb"`
+	// MaxBackups 保留的历史审计文件份数。默认 3。
+	MaxBackups int `yaml:"max_backups"`
 }
 
 // Default 返回默认配置，保证零配置文件也能启动。
@@ -152,6 +181,7 @@ func Default() *Config {
 			RequestTimeout: 30 * time.Second,
 			Debug:          true,
 			LogLevel:       "info",
+			AuthTokenFile:  "./auth_token",
 		},
 		Detection: DetectionConfig{
 			Engine: "regex",
@@ -191,7 +221,7 @@ func Default() *Config {
 			RequestTTL:    30 * time.Minute,
 			Persist:       false,
 		},
-		Audit: AuditConfig{Enabled: true, Path: "./audit.log", Export: []string{"pip", "gdpr"}, LogPII: false},
+		Audit: AuditConfig{Enabled: true, Path: "./audit.log", Export: []string{"pip", "gdpr"}, LogPII: false, MaxSizeMB: 100, MaxBackups: 3},
 	}
 }
 
@@ -217,6 +247,8 @@ func expandEnvDeep(c *Config) {
 	c.Gateway.Listen = expandEnv(c.Gateway.Listen)
 	c.Gateway.Upstream = expandEnv(c.Gateway.Upstream)
 	c.Gateway.AuthToken = expandEnv(c.Gateway.AuthToken)
+	c.Gateway.AuthTokenFile = expandEnv(c.Gateway.AuthTokenFile)
+	c.Gateway.ControlAuthToken = expandEnv(c.Gateway.ControlAuthToken)
 	c.Gateway.UpstreamAPIKey = expandEnv(c.Gateway.UpstreamAPIKey)
 	for i := range c.Gateway.Upstreams {
 		c.Gateway.Upstreams[i].BaseURL = expandEnv(c.Gateway.Upstreams[i].BaseURL)
@@ -331,6 +363,19 @@ func (c *Config) Validate() error {
 	if !strings.HasPrefix(c.Gateway.Listen, ":") {
 		return gatewayerrors.New(gatewayerrors.CodeInvalidConfig, "gateway.listen must start with ':' (e.g. :8400)")
 	}
+	// 两个字段同时给出是自相矛盾的配置：用户很可能以为「配了 token 又开了
+	// allow_unauthenticated」等于「本地免密、外部要鉴权」，而实际语义只能是二选一。
+	// 本项目其余校验一律「失败即退出、不降级」，这种会让人误解安全状态的组合不例外。
+	if strings.TrimSpace(c.Gateway.AuthToken) != "" && c.Gateway.AllowUnauthenticated {
+		return gatewayerrors.New(gatewayerrors.CodeInvalidConfig,
+			"gateway.allow_unauthenticated must not be true when gateway.auth_token is set (pick one)")
+	}
+	// 未配置 token 且未显式声明免鉴权时，网关要自动生成令牌并落盘 —— 此时路径必须可用。
+	if strings.TrimSpace(c.Gateway.AuthToken) == "" && !c.Gateway.AllowUnauthenticated &&
+		strings.TrimSpace(c.Gateway.AuthTokenFile) == "" {
+		return gatewayerrors.New(gatewayerrors.CodeInvalidConfig,
+			"gateway.auth_token_file is required when auth_token is unset and allow_unauthenticated is false")
+	}
 	for _, u := range c.Gateway.Upstreams {
 		switch u.Protocol {
 		case "openai", "anthropic":
@@ -365,6 +410,20 @@ func (c *Config) Validate() error {
 	if c.Vault.RequestTTL < 5*time.Minute {
 		return gatewayerrors.New(gatewayerrors.CodeInvalidConfig, "vault.request_ttl must be >= 5m")
 	}
+	// vault.persist 在旧实现里是单向无效功能：落盘用本次进程的随机密钥（passphrase
+	// 恒为 nil），而 Get 只查内存 map、从不读磁盘。于是配了 persist 的结果是——
+	// 文件永远解不开、也永不会被读到，只在磁盘上持续累积不可解密的 .lmgv。
+	//
+	// 这比「不能持久化」更危险：用户据此认为「我已持久化」，实际重启即丢。而
+	// VaultConfig 里没有任何密钥字段，所以当前也不存在「配好密钥让它生效」的路径。
+	// 因此在密钥管理（轮换 / 备份 / 谁能读）想清楚之前直接拒绝这个开关，而不是
+	// 留一条看起来能用、实际骗人的路。
+	if c.Vault.Persist {
+		return gatewayerrors.New(gatewayerrors.CodeInvalidConfig,
+			"vault.persist is not supported: mapping tables are memory-only "+
+				"(sealed files cannot be read back because the key is per-process and never stored); "+
+				"remove vault.persist from your config, or state your persistence requirement as an issue")
+	}
 	if c.Vault.Encryption != "" && c.Vault.Encryption != "aes-256-gcm" {
 		return gatewayerrors.Errorf(gatewayerrors.CodeInvalidConfig, "unsupported vault.encryption: %q", c.Vault.Encryption)
 	}
@@ -383,10 +442,84 @@ func (c *Config) Validate() error {
 	if err := ValidateSimulateDictionary(c.Replacement.SimulateZH.Dictionary); err != nil {
 		return err
 	}
+	if c.Audit.MaxSizeMB < 0 {
+		return gatewayerrors.Errorf(gatewayerrors.CodeInvalidConfig,
+			"audit.max_size_mb must be >= 0 (0 disables rotation), got %d", c.Audit.MaxSizeMB)
+	}
+	if c.Audit.MaxBackups <= 0 {
+		c.Audit.MaxBackups = 3
+	}
 	if c.Detection.Cache.MaxEntries <= 0 {
 		c.Detection.Cache.MaxEntries = 10000
 	}
 	return nil
+}
+
+// ResolveAuthToken 解析数据面实际使用的访问令牌。
+//
+// 三种来源，优先级从高到低：
+//  1. gateway.auth_token —— 用户显式配置
+//  2. gateway.auth_token_file —— 上次自动生成并落盘的令牌（重启复用，客户端不必改配置）
+//  3. 新生成 32 字节随机令牌并写入 gateway.auth_token_file（0600）
+//
+// 返回空令牌表示「本次启动明确不鉴权」（allow_unauthenticated=true）。第二个返回值
+// 表示令牌是否为本次新生成，调用方据此决定要不要把令牌值打印出来（只需要一次）。
+func (c *Config) ResolveAuthToken() (string, bool, error) {
+	if tok := strings.TrimSpace(c.Gateway.AuthToken); tok != "" {
+		return tok, false, nil
+	}
+	if c.Gateway.AllowUnauthenticated {
+		return "", false, nil
+	}
+	path := strings.TrimSpace(c.Gateway.AuthTokenFile)
+	raw, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if tok := strings.TrimSpace(string(raw)); tok != "" {
+			return tok, false, nil
+		}
+		// 文件存在但内容为空：当作「尚未生成」，走下面的覆写分支。
+	case os.IsNotExist(err):
+		// 首次运行：生成。
+	default:
+		return "", false, gatewayerrors.Wrap(gatewayerrors.CodeInvalidConfig, "read auth_token_file", err)
+	}
+	tok, err := generateAuthToken()
+	if err != nil {
+		return "", false, gatewayerrors.Wrap(gatewayerrors.CodeInvalidConfig, "generate auth token", err)
+	}
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return "", false, gatewayerrors.Wrap(gatewayerrors.CodeInvalidConfig, "create auth_token_file dir", err)
+		}
+	}
+	if err := os.WriteFile(path, []byte(tok+"\n"), 0o600); err != nil {
+		return "", false, gatewayerrors.Wrap(gatewayerrors.CodeInvalidConfig, "write auth_token_file", err)
+	}
+	return tok, true, nil
+}
+
+// generateAuthToken 生成 32 字节随机令牌（hex 编码，64 字符）。
+func generateAuthToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// authState 返回可安全落日志的鉴权状态（绝不输出令牌本身）。
+func (c *Config) authState() string {
+	switch {
+	case c.Gateway.AllowUnauthenticated:
+		return "none(explicit)"
+	case strings.TrimSpace(c.Gateway.AuthToken) != "":
+		return "configured"
+	case strings.TrimSpace(c.Gateway.ControlAuthToken) != "":
+		return "auto+control"
+	default:
+		return "auto"
+	}
 }
 
 // SimulatableTypes 返回可仿真的实体类型副本。
@@ -517,7 +650,7 @@ func (c *Config) String() string {
 	for _, u := range c.EffectiveUpstreams() {
 		routes = append(routes, u.String())
 	}
-	return fmt.Sprintf("listen=%s upstreams=[%s] engine=%s strategy=%s fail_closed=%v debug=%v",
+	return fmt.Sprintf("listen=%s upstreams=[%s] engine=%s strategy=%s fail_closed=%v debug=%v auth=%s",
 		c.Gateway.Listen, strings.Join(routes, "; "), c.Detection.Engine, c.Replacement.Strategy,
-		c.Policy.FailClosed, c.Gateway.Debug)
+		c.Policy.FailClosed, c.Gateway.Debug, c.authState())
 }

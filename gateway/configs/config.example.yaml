@@ -5,6 +5,18 @@ gateway:
   listen: ":8400"                        # 必须以 ':' 开头
   upstream: "https://api.openai.com"     # 必填
   auth_token: "${GATEWAY_AUTH_TOKEN}"    # 客户端访问网关的令牌（支持 ${ENV} 展开）
+  # 未配置 auth_token 时（含环境变量展开后为空）：网关自动生成 32 字节随机令牌，
+  # 写入 auth_token_file（0600）并在启动日志里打印一次；重启复用同一个令牌，所以
+  # 客户端只需配置一次。
+  #
+  # 为什么不能靠「auth_token 留空」表示「不要鉴权」：无鉴权 + 已配 upstream_api_key
+  # 意味着任何能连到端口的人都可以用你的 key 调上游、并按 request_id 还原原文。
+  # 因此「不要鉴权」必须是显式声明，不能因为忘写而静默发生。
+  # auth_token_file: "./auth_token"
+  # allow_unauthenticated: true          # 显式关闭鉴权（仅限不可被他人访问的接口）
+  # control_auth_token: "${GATEWAY_CONTROL_TOKEN}"
+  #   ↑ 控制面 /v1/privacy/* 的独立令牌。控制面能按 request_id 还原原文，数据面只转发；
+  #     给 hooks 的凭据不该同时具备「还原任意历史请求原文」的能力。留空则复用 auth_token。
   upstream_api_key: "${OPENAI_API_KEY}"  # 转发上游时使用的密钥，不透传客户端凭证
   request_timeout: "30s"
   debug: true                            # 内嵌调试面板（--no-debug 可彻底关闭；面板恒为回环可访问）
@@ -113,10 +125,15 @@ vault:
   encryption: "aes-256-gcm"
   key_derivation: "scrypt"
   request_ttl: "30m"
-  persist: false                         # 默认不落盘，仅内存 + 请求生命周期
+  # vault.persist 已移除：旧实现用「本次进程随机生成、从不落盘」的密钥加密，
+  # 而 Get 只查内存 map、从不读磁盘——配了它只会让磁盘上堆满永远解不开的 .lmgv，
+  # 使用者却以为已经持久化。现在写这个键会直接启动失败（而不是假装成功）。
+  # 需要跨重启保留映射表时，请先把密钥管理（轮换 / 备份 / 谁能读）想清楚。
 
 audit:
   enabled: true
   path: "./audit.log"
   export: ["pip", "gdpr"]
   log_pii: false                         # 审计默认不记录原文
+  max_size_mb: 100                       # 单文件上限，超过轮转为 audit.log.1/.2…；0 = 关闭轮转
+  max_backups: 3                         # 保留历史份数

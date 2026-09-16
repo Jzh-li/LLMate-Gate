@@ -9,7 +9,10 @@
 gateway:
   listen: ":8401"
   upstream: "http://127.0.0.1:8999"
-  auth_token: ""
+  # 本守门显式声明「不鉴权」，而不是靠 auth_token 恰好为空。
+  # 网关不再把空的 auth_token 当作「不要鉴权」：同一个空值既可能是「还没配」也可能是
+  # 「明确不要」，而前者叠加 upstream_api_key 就等于对外裸奔。所以这件事必须写出来。
+  allow_unauthenticated: true
   upstream_api_key: "bench-no-auth"
   request_timeout: "10s"
   # debug=true 让 /_api/detect 可用（不跑 L1 时也无害）

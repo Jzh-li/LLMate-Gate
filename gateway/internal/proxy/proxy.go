@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -687,12 +688,29 @@ func singleJoiningSlash(a, b string) string {
 	return a + b
 }
 
+// requestIDPattern 客户端可提供的请求标识白名单：字母 / 数字 / - / _，8~64 字符。
+//
+// 网关侧的 request_id 有两个真实用途——vault 映射表主键与调试面板索引键——所以它
+// 必须是网关能约束的值。客户端提供的任意字符串直接进键空间会带来两类问题：
+//   - 超长 / 含特殊字符的值污染审计日志、面板与（历史版本里的）落盘文件名
+//   - 可预测的值（固定值、时间戳、用户 ID 派生）让「按 request_id 还原原文」变成
+//     一条可猜的通道
+//
+// 说清楚定位：客户端提供的 ID 只是为了让客户端日志能与网关日志对齐，它从来不是
+// 身份凭据，网关的任何授权判断都不该建立在它之上（还原能力由控制面令牌把关）。
+//
+// 不合规时静默改用服务端随机值而不是报错：ID 对客户端是便利设施，不是契约字段，
+// 为一个格式不合规的便利值让整个请求失败不值得。
+var requestIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
+
+// conversationIDPattern 会话 ID 白名单，长度放宽到 1（会话 ID 短是常见写法）。
+var conversationIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
 func requestID(r *http.Request) string {
-	if v := r.Header.Get("X-Request-ID"); v != "" {
-		return v
-	}
-	if v := r.Header.Get("X-Llmate-Request-Id"); v != "" {
-		return v
+	for _, h := range []string{"X-Request-ID", "X-Llmate-Request-Id"} {
+		if v := r.Header.Get(h); requestIDPattern.MatchString(v) {
+			return v
+		}
 	}
 	return randHex(16)
 }
@@ -701,8 +719,12 @@ func requestID(r *http.Request) string {
 //
 // 原签名带一个 io.Reader 参数却从未使用（历史遗留的「从 body 里掏 conversation_id」
 // 设想，从未实现）。已删除，避免调用方误以为 body 会被读取。
+//
+// 这里同样校验收紧：该值会成为 Merkle 缓存的键，而缓存保存的是「上一轮扫到哪里」的
+// 增量状态。若两个不相干的会话共用同一个 ID，后者的新增文本会被当成「已扫过」而跳过
+// 检测——那是直接漏检。ID 不合规时按「无会话」处理（每次全量扫），宁可多扫一遍。
 func conversationID(r *http.Request) string {
-	if v := r.Header.Get("X-Conversation-ID"); v != "" {
+	if v := r.Header.Get("X-Conversation-ID"); conversationIDPattern.MatchString(v) {
 		return v
 	}
 	return ""

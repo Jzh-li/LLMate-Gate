@@ -30,7 +30,7 @@ func benchEntities(b *testing.B) []types.Entity {
 
 // BenchmarkReplacerSessionReplace 会话内占位符替换热路径（每请求一次）。
 func BenchmarkReplacerSessionReplace(b *testing.B) {
-	v, err := vault.NewMemVault(0, nil, false, "")
+	v, err := vault.NewMemVault(0, nil)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func BenchmarkReplacerSessionReplace(b *testing.B) {
 
 // BenchmarkReplacerFullReplace 完整 Replace（含 vault Put 的请求级路径）。
 func BenchmarkReplacerFullReplace(b *testing.B) {
-	v, err := vault.NewMemVault(0, nil, false, "")
+	v, err := vault.NewMemVault(0, nil)
 	if err != nil {
 		b.Fatal(err)
 	}

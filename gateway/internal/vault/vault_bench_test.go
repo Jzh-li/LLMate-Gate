@@ -25,7 +25,7 @@ func benchTable(i int) *types.MappingTable {
 
 // BenchmarkVaultPutGet Put + Get 一张 4 条目映射表（每请求一次的稳态路径）。
 func BenchmarkVaultPutGet(b *testing.B) {
-	v, err := NewMemVault(time.Hour, nil, false, "")
+	v, err := NewMemVault(time.Hour, nil)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func BenchmarkVaultPutGet(b *testing.B) {
 
 // BenchmarkVaultSealUnseal 加密落盘往返（AES-256-GCM + scrypt）。
 func BenchmarkVaultSealUnseal(b *testing.B) {
-	v, err := NewMemVault(time.Hour, []byte("bench-passphrase-32-bytes-123456"), false, "")
+	v, err := NewMemVault(time.Hour, []byte("bench-passphrase-32-bytes-123456"))
 	if err != nil {
 		b.Fatal(err)
 	}

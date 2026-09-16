@@ -13,7 +13,7 @@ import (
 
 func newTestVault(t *testing.T, ttl time.Duration) *MemVault {
 	t.Helper()
-	v, err := NewMemVault(ttl, []byte("unit-test-passphrase"), false, "")
+	v, err := NewMemVault(ttl, []byte("unit-test-passphrase"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = v.Close() })
 	return v
@@ -134,4 +134,46 @@ func TestStartSweeper(t *testing.T) {
 func TestPut_RequiresRequestID(t *testing.T) {
 	v := newTestVault(t, time.Minute)
 	require.Error(t, v.Put(&types.MappingTable{}))
+}
+
+// TestPut_RejectsOverwrite 同一 request_id 上的未过期条目不得被静默覆盖。
+//
+// 覆盖会造成两件事：先那次请求的占位符永远还原不回来（静默损坏），以及两次请求的
+// 原文混进同一个可还原键（用已知 ID 覆盖并读取他人映射的路径）。两者都必须在写入口
+// 就断掉，而不是等到还原时才发现串了。
+func TestPut_RejectsOverwrite(t *testing.T) {
+	v := newTestVault(t, time.Minute)
+	require.NoError(t, v.Put(sampleTable("req_dup")))
+
+	second := sampleTable("req_dup")
+	second.Entries = []types.MappingEntry{
+		{Placeholder: "<<zh_person_name_1>>", Original: []byte("另一个人的原文"), EntityType: "zh_person_name"},
+	}
+	err := v.Put(second)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "refusing to overwrite")
+
+	// 先写入的那份必须还在，且没有被替换
+	got, err := v.Get("req_dup")
+	require.NoError(t, err)
+	require.Len(t, got.Entries, 2)
+	require.Equal(t, "张三", string(got.Entries[0].Original))
+}
+
+// TestPut_AllowsReuseAfterExpiry 过期即释放键空间：同一个 ID 过期后可以再次使用。
+//
+// 与上一条配套——拒绝覆盖的边界是「未过期」，不是「曾出现过」。否则 TTL 到期的
+// 条目会永久占着 ID，把随机 ID 空间一点点耗掉。
+func TestPut_AllowsReuseAfterExpiry(t *testing.T) {
+	v := newTestVault(t, time.Minute)
+	stale := sampleTable("req_reuse")
+	stale.CreatedAt = time.Now().Add(-10 * time.Minute)
+	stale.ExpiresAt = time.Now().Add(-time.Minute)
+	require.NoError(t, v.Put(stale))
+
+	require.NoError(t, v.Put(sampleTable("req_reuse")))
+	got, err := v.Get("req_reuse")
+	require.NoError(t, err)
+	require.Equal(t, "req_reuse", got.RequestID)
+	require.False(t, got.Expired(time.Now()))
 }

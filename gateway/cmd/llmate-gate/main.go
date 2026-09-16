@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -66,13 +67,23 @@ func main() {
 	if listen != "" {
 		cfg.Gateway.Listen = listen
 	}
+
+	// 访问令牌：显式配置 > 上次自动生成并落盘的 > 新生成并落盘。
+	// 解析放在启动最前面：拿到令牌才算「这次启动的安全状态已确定」，后面的
+	// 告警与监听才有意义。
+	authTok, tokenGenerated, err := cfg.ResolveAuthToken()
+	if err != nil {
+		log.Fatalf("auth token error: %v", err)
+	}
+
 	log.Printf("[llmate-gate] %s (version=%s)", cfg.String(), version)
+	logSecurityWarnings(cfg, authTok, tokenGenerated)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Vault：内存驻留 + 可选加密落盘；密钥随机生成不落盘。
-	v, err := vault.NewMemVault(cfg.Vault.RequestTTL, nil, cfg.Vault.Persist, cfg.Vault.Path)
+	// Vault：仅内存驻留；密钥随机生成、不落盘（见 vault 包注释）。
+	v, err := vault.NewMemVault(cfg.Vault.RequestTTL, nil)
 	if err != nil {
 		log.Fatalf("vault init error: %v", err)
 	}
@@ -183,7 +194,8 @@ func main() {
 	}
 
 	// 审计日志。
-	alog, err := audit.NewLogger(cfg.Audit.Path, cfg.Audit.Enabled, cfg.Audit.LogPII)
+	alog, err := audit.NewLoggerRotating(cfg.Audit.Path, cfg.Audit.Enabled, cfg.Audit.LogPII,
+		int64(cfg.Audit.MaxSizeMB)<<20, cfg.Audit.MaxBackups)
 	if err != nil {
 		log.Fatalf("audit init error: %v", err)
 	}
@@ -242,11 +254,12 @@ func main() {
 
 	// 服务。
 	srv := server.New(server.Options{
-		Proxy:     px,
-		Config:    cfg,
-		Metrics:   m,
-		AuthToken: cfg.Gateway.AuthToken,
-		Health:    guarded.Health,
+		Proxy:            px,
+		Config:           cfg,
+		Metrics:          m,
+		AuthToken:        authTok,
+		ControlAuthToken: cfg.Gateway.ControlAuthToken,
+		Health:           guarded.Health,
 	})
 	srv.SetMetricHandler(metricHandler)
 
@@ -290,6 +303,44 @@ func main() {
 	log.Printf("[llmate-gate] listening on %s (debug=%v)", cfg.Gateway.Listen, cfg.Gateway.Debug)
 	if err := srv.Start(ctx, cfg.Gateway.Listen); err != nil {
 		log.Fatalf("server error: %v", err)
+	}
+}
+
+// logSecurityWarnings 在启动期显式陈述当前的安全状态。
+//
+// 存在的理由：多数暴露面不是「配置写错了」，而是「没写、而使用者以为写了」。
+// auth_token 未配置时网关会自动兜底（见 config.ResolveAuthToken），但兜底这件事本身
+// 必须可见——否则使用者既不知道客户端为什么 401，也不知道自己刚得到一个令牌。
+// 启动日志是唯一每次启动都能触达使用者的位置。
+//
+// 好消息与坏消息一并陈述：「没看到告警」和「看到没有告警」是两件事。
+func logSecurityWarnings(cfg *config.Config, authTok string, generated bool) {
+	switch {
+	case cfg.Gateway.AllowUnauthenticated:
+		log.Printf("[llmate-gate] SECURITY WARNING: authentication is DISABLED "+
+			"(gateway.allow_unauthenticated=true). Anyone who can reach %s can call the upstream with "+
+			"your configured API key, and can restore redacted text by request_id. "+
+			"Only acceptable on an interface that is not reachable by others.", cfg.Gateway.Listen)
+	case generated:
+		log.Printf("[llmate-gate] gateway.auth_token is not configured — generated a random token and "+
+			"stored it in %s (mode 0600).", cfg.Gateway.AuthTokenFile)
+		log.Printf("[llmate-gate] NEW ACCESS TOKEN: %s", authTok)
+		log.Printf("[llmate-gate] clients must send it as 'Authorization: Bearer <token>' or " +
+			"'X-Api-Key: <token>'. The token is reused on the next restart, so it only has to be " +
+			"configured once. Keep this line out of shared or uploaded logs.")
+	case strings.TrimSpace(cfg.Gateway.AuthToken) != "":
+		log.Printf("[llmate-gate] access token: from config (gateway.auth_token)")
+	default:
+		log.Printf("[llmate-gate] access token: loaded from %s", cfg.Gateway.AuthTokenFile)
+	}
+
+	if authTok != "" && strings.TrimSpace(cfg.Gateway.ControlAuthToken) == "" {
+		log.Printf("[llmate-gate] control plane (/v1/privacy/*, can restore original text) shares the " +
+			"data-plane token; set gateway.control_auth_token to separate the two capabilities.")
+	}
+	if cfg.Audit.Enabled && cfg.Audit.LogPII {
+		log.Printf("[llmate-gate] SECURITY WARNING: audit.log_pii=true — detected original values are "+
+			"written to %s in plaintext.", cfg.Audit.Path)
 	}
 }
 

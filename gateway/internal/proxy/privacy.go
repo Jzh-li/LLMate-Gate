@@ -46,9 +46,16 @@ type privacyRedactReq struct {
 	JSON           json.RawMessage `json:"json,omitempty"`
 	Text           string          `json:"text,omitempty"`
 	ConversationID string          `json:"conversation_id,omitempty"`
-	Strategy       string          `json:"strategy,omitempty"`      // placeholder（默认）| simulate
-	GateOnly       bool            `json:"gate_only,omitempty"`     // true=只判不改；默认 false
-	BlockTypes     []string        `json:"block_types,omitempty"`   // gate_only 模式下，命中即标记的 PII 类型（默认全部）
+	Strategy       string          `json:"strategy,omitempty"`    // placeholder（默认）| simulate
+	GateOnly       bool            `json:"gate_only,omitempty"`   // true=只判不改；默认 false
+	BlockTypes     []string        `json:"block_types,omitempty"` // gate_only 模式下，命中即标记的 PII 类型（默认全部）
+	// IncludeValues：gate_only 模式下是否把命中字符串本身回显给调用方，默认 false。
+	//
+	// 这个字段的存在不必回避它的用途——hooks 想「看一眼命中了什么」是合理的。
+	// 但默认必须是关：只要它默认开着，叠加「网关可被调用」这一事实，网关就同时是一个
+	// 「提交一段文本 → 拿到其中的 PII 原文」的提取接口。而决定「拦还是放」只需要
+	// type（必要时加 score），不需要原文。默认开是拿不必要的能力换一点点调试便利。
+	IncludeValues bool `json:"include_values,omitempty"`
 }
 
 // privacyRedactResp POST /v1/privacy/redact 出参。
@@ -64,11 +71,23 @@ type privacyRedactResp struct {
 	Blocked  bool             `json:"blocked,omitempty"` // 是否因 block_types 命中而拦截
 }
 
-// entitySummary 极简 PII 实体摘要（gate_only 模式用，不含 start/end 避免泄漏结构）
+// entitySummary 极简 PII 实体摘要（gate_only 模式用，不含 start/end 避免泄漏结构）。
+//
+// Value 默认为空：只有调用方显式请求（include_values=true）才回显原文。
+// 判定「拦还是放」用的是 Type（必要时加 Score），原文属于调试信息。
 type entitySummary struct {
 	Type  string  `json:"type"`
-	Value string  `json:"value,omitempty"` // 命中字符串本身（用于 hooks 决定「拦还是脱敏后放」）
+	Value string  `json:"value,omitempty"`
 	Score float64 `json:"score"`
+}
+
+// gateSummary 构造 gate_only 的实体摘要；仅在调用方显式要求时带上命中原文。
+func gateSummary(e types.Entity, includeValue bool) entitySummary {
+	s := entitySummary{Type: e.Type, Score: e.Score}
+	if includeValue {
+		s.Value = e.Value
+	}
+	return s
 }
 
 // privacyRestoreReq POST /v1/privacy/restore 入参。
@@ -199,8 +218,7 @@ func (p *Proxy) handleGateOnly(w http.ResponseWriter, r *http.Request, req *priv
 		// 走 gateDocumentOnly：递归但不替换
 		ents := p.gateDocumentJSON(r.Context(), req.ConversationID, req.JSON)
 		for _, e := range ents {
-			summary := entitySummary{Type: e.Type, Value: e.Value, Score: e.Score}
-			entities = append(entities, summary)
+			entities = append(entities, gateSummary(e, req.IncludeValues))
 			if len(blockSet) == 0 || blockSet[e.Type] {
 				blocked = true
 			}
@@ -214,8 +232,7 @@ func (p *Proxy) handleGateOnly(w http.ResponseWriter, r *http.Request, req *priv
 			return
 		}
 		for _, e := range ents {
-			summary := entitySummary{Type: e.Type, Value: e.Value, Score: e.Score}
-			entities = append(entities, summary)
+			entities = append(entities, gateSummary(e, req.IncludeValues))
 			if len(blockSet) == 0 || blockSet[e.Type] {
 				blocked = true
 			}

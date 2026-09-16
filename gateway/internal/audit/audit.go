@@ -6,6 +6,7 @@ package audit
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -51,31 +52,75 @@ type Logger struct {
 	logPII   bool
 	disabled bool
 
+	// 轮转：path 超过 maxSize 字节时归到 path.1，历史文件顺移，最多留 maxBackups 份。
+	// maxSize<=0 表示不轮转（保留旧行为）。
+	path       string
+	maxSize    int64
+	maxBackups int
+	size       int64 // 当前文件已写入字节数（避免每次写入都 Stat）
+
 	// ring 内存环形缓冲：保存最近 ringCap 条事件，供 /_api/audit 查询
 	// （桌面 UI 审计面板数据源）。仅当 !disabled 时填充。
 	ring    []Event
 	ringCap int
 }
 
-// NewLogger 构造审计 logger。
+// 审计文件轮转默认参数。
+const (
+	// defaultAuditMaxSize 单个审计文件上限 100 MiB。选这个量级是因为一条事件只有
+	// 几百字节，100 MiB 对应数十万次请求——足够长到不影响排查，又短到不会把磁盘吃满。
+	defaultAuditMaxSize int64 = 100 << 20
+	// defaultAuditMaxBackups 保留 3 份历史，够回溯最近几轮，也不会无限占盘。
+	defaultAuditMaxBackups = 3
+)
+
+// NewLogger 构造审计 logger（默认轮转参数）。
+//
 // path 为空或 enabled=false 时仅丢弃（不报错），保证代理可独立运行。
 func NewLogger(path string, enabled, logPII bool) (*Logger, error) {
-	l := &Logger{logPII: logPII, ringCap: 200, ring: make([]Event, 0, 200)}
-	if !enabled {
+	return NewLoggerRotating(path, enabled, logPII, defaultAuditMaxSize, defaultAuditMaxBackups)
+}
+
+// NewLoggerRotating 构造审计 logger，并在文件超过 maxSize 字节时轮转。
+//
+// 为什么需要轮转：审计文件里会长期堆着「谁在何时把什么类型的 PII 送去了哪个上游」。
+// 单文件无限增长既是磁盘风险，也是处置风险——一旦需要删除或归档，面对的是一个越来越
+// 大的、无法安全裁剪的单文件。log_pii=true 时更严重，原文也在里面。
+func NewLoggerRotating(path string, enabled, logPII bool, maxSize int64, maxBackups int) (*Logger, error) {
+	l := &Logger{
+		logPII:     logPII,
+		ringCap:    200,
+		ring:       make([]Event, 0, 200),
+		path:       path,
+		maxSize:    maxSize,
+		maxBackups: maxBackups,
+	}
+	if !enabled || path == "" {
 		l.disabled = true
 		return l, nil
 	}
-	if path == "" {
-		l.disabled = true
-		return l, nil
+	if l.maxBackups < 1 {
+		l.maxBackups = 1
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	f, err := l.openFile()
 	if err != nil {
-		return nil, gatewayerrors.Wrap(gatewayerrors.CodeInvalidRequest, "open audit log", err)
+		return nil, err
 	}
 	l.file = f
 	l.writer = bufio.NewWriter(f)
 	return l, nil
+}
+
+// openFile 打开审计文件，并把 size 对齐到磁盘上的真实长度（重启后继续累加）。
+func (l *Logger) openFile() (*os.File, error) {
+	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, gatewayerrors.Wrap(gatewayerrors.CodeInvalidRequest, "open audit log", err)
+	}
+	if fi, err := f.Stat(); err == nil {
+		l.size = fi.Size()
+	}
+	return f, nil
 }
 
 // Write 追加一条审计事件（线程安全）。
@@ -90,20 +135,57 @@ func (l *Logger) Write(e *Event) error {
 	if err != nil {
 		return err
 	}
+	line := append(b, '\n')
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if _, err := l.writer.Write(append(b, '\n')); err != nil {
+	l.rotateIfFull(len(line))
+	if _, err := l.writer.Write(line); err != nil {
 		return err
 	}
 	if err := l.writer.Flush(); err != nil {
 		return err
 	}
+	l.size += int64(len(line))
 	// 内存环形缓冲：供 /_api/audit 查询近期事件（桌面 UI 审计面板数据源）
 	l.ring = append(l.ring, *e)
 	if len(l.ring) > l.ringCap {
 		l.ring = l.ring[len(l.ring)-l.ringCap:]
 	}
 	return nil
+}
+
+// rotateIfFull 在「本次追加会越过阈值」时轮转当前文件。调用方必须持有 l.mu。
+//
+// 轮转彻底失败（连重开都失败）时不做补偿动作，只留下 l.file == nil：后续 Write 会
+// 在 l.writer.Write 上返回错误。相比之下，「轮转不了就悄悄丢事件」是更坏的结果——
+// 审计的价值全在完整性，静默丢事件会让日志看起来毫无异常。
+func (l *Logger) rotateIfFull(incoming int) {
+	if l.maxSize <= 0 || l.size == 0 || l.size+int64(incoming) <= l.maxSize {
+		return
+	}
+	_ = l.writer.Flush()
+	if l.file != nil {
+		_ = l.file.Close()
+		l.file = nil
+	}
+	l.rotateFiles()
+	// 重开：轮转成功 → 新空文件；轮转失败 → 原文件继续追加。
+	// 无论哪种结果都重开，审计不能因为「归档动作失败」而中断。
+	if f, err := l.openFile(); err == nil {
+		l.file = f
+		l.writer = bufio.NewWriter(f)
+	}
+}
+
+// rotateFiles 把 path 归到 path.1，历史文件依次顺移，最老的删除。
+//
+// 每一步都忽略错误：归档是尽力而为的动作，缺一份历史不该阻断审计。
+func (l *Logger) rotateFiles() {
+	_ = os.Remove(fmt.Sprintf("%s.%d", l.path, l.maxBackups))
+	for i := l.maxBackups - 1; i >= 1; i-- {
+		_ = os.Rename(fmt.Sprintf("%s.%d", l.path, i), fmt.Sprintf("%s.%d", l.path, i+1))
+	}
+	_ = os.Rename(l.path, l.path+".1")
 }
 
 // Recent 返回最近 n 条审计事件（最新在前），供查询端点使用。

@@ -247,6 +247,145 @@ func TestSimulatableTypes(t *testing.T) {
 	require.NotEqual(t, "mutated", simulator.SimulatableTypes()[0], "simulator 侧同样必须是副本")
 }
 
+// ---------- 鉴权令牌解析（Specs/07 阶段 A）----------
+//
+// 这一组测试钉住的核心不变量：**「没配 auth_token」不再等于「不鉴权」**。
+// 它必须等于「自动生成一个稳定令牌」——稳定是关键，每次重启换令牌会把用户
+// 推回「干脆关掉鉴权」，那比原来更不安全。
+
+// TestResolveAuthToken_Configured 显式配置优先，且不落盘任何令牌文件。
+func TestResolveAuthToken_Configured(t *testing.T) {
+	dir := t.TempDir()
+	c := Default()
+	c.Gateway.AuthToken = "explicit-token"
+	c.Gateway.AuthTokenFile = filepath.Join(dir, "auth_token")
+
+	tok, generated, err := c.ResolveAuthToken()
+	require.NoError(t, err)
+	require.Equal(t, "explicit-token", tok)
+	require.False(t, generated)
+	_, statErr := os.Stat(c.Gateway.AuthTokenFile)
+	require.True(t, os.IsNotExist(statErr), "显式配置令牌时不该再落盘文件")
+}
+
+// TestResolveAuthToken_GeneratesOnceAndStaysStable 未配置时生成一次、落盘 0600、重启复用。
+func TestResolveAuthToken_GeneratesOnceAndStaysStable(t *testing.T) {
+	dir := t.TempDir()
+	c := Default()
+	c.Gateway.AuthTokenFile = filepath.Join(dir, "auth_token")
+
+	tok1, generated, err := c.ResolveAuthToken()
+	require.NoError(t, err)
+	require.True(t, generated, "首次调用应报告「本次新生成」，调用方据此决定是否打印令牌")
+	require.Len(t, tok1, 64, "32 字节随机 → hex 64 字符")
+	require.False(t, c.Gateway.AllowUnauthenticated)
+
+	fi, err := os.Stat(c.Gateway.AuthTokenFile)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o600), fi.Mode().Perm(), "令牌等价于访问凭据，必须 0600")
+
+	// 模拟重启：新的 Config 对象读同一个文件
+	c2 := Default()
+	c2.Gateway.AuthTokenFile = c.Gateway.AuthTokenFile
+	tok2, generated2, err := c2.ResolveAuthToken()
+	require.NoError(t, err)
+	require.False(t, generated2)
+	require.Equal(t, tok1, tok2, "重启后令牌必须不变，否则客户端每次都要改配置")
+}
+
+// TestResolveAuthToken_FillsEmptyFile 内容为空的令牌文件按「尚未生成」处理。
+func TestResolveAuthToken_FillsEmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "auth_token")
+	require.NoError(t, os.WriteFile(p, []byte("\n"), 0o600))
+
+	c := Default()
+	c.Gateway.AuthTokenFile = p
+	tok, generated, err := c.ResolveAuthToken()
+	require.NoError(t, err)
+	require.True(t, generated)
+	require.NotEmpty(t, tok)
+}
+
+// TestResolveAuthToken_ExplicitlyDisabled 显式声明免鉴权时不生成令牌。
+func TestResolveAuthToken_ExplicitlyDisabled(t *testing.T) {
+	c := Default()
+	c.Gateway.AllowUnauthenticated = true
+	tok, generated, err := c.ResolveAuthToken()
+	require.NoError(t, err)
+	require.Empty(t, tok)
+	require.False(t, generated)
+}
+
+// TestValidate_AuthConfigConflicts 鉴权相关的自相矛盾配置必须在启动期拦下。
+func TestValidate_AuthConfigConflicts(t *testing.T) {
+	t.Run("同时给 token 与 allow_unauthenticated", func(t *testing.T) {
+		// 用户很可能以为这是「本地免密、外部要鉴权」，实际语义只能二选一。
+		// 与其让它静默按某一种解释生效，不如拒绝启动。
+		c := Default()
+		c.Gateway.AuthToken = "t"
+		c.Gateway.AllowUnauthenticated = true
+		err := c.Validate()
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "allow_unauthenticated must not be true")
+	})
+	t.Run("未配 token 又没给落盘路径", func(t *testing.T) {
+		c := Default()
+		c.Gateway.AuthTokenFile = ""
+		err := c.Validate()
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "auth_token_file is required")
+	})
+	t.Run("显式免鉴权合法", func(t *testing.T) {
+		c := Default()
+		c.Gateway.AllowUnauthenticated = true
+		require.NoError(t, c.Validate())
+	})
+	t.Run("默认配置合法且默认不是免鉴权", func(t *testing.T) {
+		c := Default()
+		require.NoError(t, c.Validate())
+		require.False(t, c.Gateway.AllowUnauthenticated, "免鉴权必须是显式选择")
+		require.Equal(t, "./auth_token", c.Gateway.AuthTokenFile)
+	})
+}
+
+// TestValidate_RejectsVaultPersist persist 是「看起来能用、实际骗人」的开关，必须拒绝。
+func TestValidate_RejectsVaultPersist(t *testing.T) {
+	c := Default()
+	c.Vault.Persist = true
+	err := c.Validate()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "vault.persist is not supported")
+}
+
+// TestValidate_AuditRotation 审计轮转参数：负值拒绝，0 表示关闭轮转。
+func TestValidate_AuditRotation(t *testing.T) {
+	c := Default()
+	c.Audit.MaxSizeMB = -1
+	require.Error(t, c.Validate())
+
+	c = Default()
+	c.Audit.MaxSizeMB = 0
+	require.NoError(t, c.Validate(), "0 表示关闭轮转，是合法取值")
+	require.Equal(t, 100, Default().Audit.MaxSizeMB, "默认应开启轮转")
+	require.Equal(t, 3, Default().Audit.MaxBackups)
+}
+
+// TestAuthState_NeverLeaksToken 配置摘要可以报鉴权状态，但绝不能带出令牌。
+func TestAuthState_NeverLeaksToken(t *testing.T) {
+	c := Default()
+	c.Gateway.AuthToken = "super-secret-token-value"
+	require.Contains(t, c.String(), "auth=configured")
+	require.NotContains(t, c.String(), "super-secret-token-value")
+
+	c = Default()
+	c.Gateway.AllowUnauthenticated = true
+	require.Contains(t, c.String(), "auth=none(explicit)")
+
+	c = Default()
+	require.Contains(t, c.String(), "auth=auto")
+}
+
 // TestExampleConfig_Loads 随仓库发布的示例配置必须能被加载。
 //
 // 示例配置是文档的一部分，最容易在加字段时忘了同步、或者写出 schema 里不存在的

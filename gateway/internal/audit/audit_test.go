@@ -2,6 +2,7 @@ package audit
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -57,5 +58,96 @@ func TestLoggerDisabledRecentNil(t *testing.T) {
 	}
 	if got := l.Recent(10); got != nil {
 		t.Fatalf("disabled Recent should be nil, got %d events", len(got))
+	}
+}
+
+// TestLoggerRotation 超过阈值时轮转：历史文件顺移，超出保留份数的被删除。
+func TestLoggerRotation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.log")
+	// 阈值设小（200B）：一条事件约 100+ 字节，几条就会触发一次轮转。
+	l, err := NewLoggerRotating(path, true, false, 200, 2)
+	if err != nil {
+		t.Fatalf("new logger: %v", err)
+	}
+	for i := 0; i < 30; i++ {
+		if err := l.Write(&Event{RequestID: fmt.Sprintf("req-%03d", i)}); err != nil {
+			t.Fatalf("write %d: %v", i, err)
+		}
+	}
+	_ = l.Close()
+
+	// 轮转发生了：至少存在一份历史文件
+	if _, err := os.Stat(path + ".1"); err != nil {
+		t.Fatalf("未发生轮转，缺少 %s: %v", path+".1", err)
+	}
+	// 保留份数上限：maxBackups=2 → 只该有 .1 / .2，不该有 .3
+	if _, err := os.Stat(path + ".3"); !os.IsNotExist(err) {
+		t.Fatalf("maxBackups=2 时不应保留 .3")
+	}
+	// 当前文件必须仍在正常写入（轮转后重开的那个）
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat current: %v", err)
+	}
+	if fi.Size() == 0 {
+		t.Fatalf("轮转后当前文件应为空并继续追加，实际为 0 字节说明轮转发生在写入之后")
+	}
+	// 权限：审计文件可能含 PII，必须是 0600
+	if perm := fi.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("审计文件权限应为 0600，实际 %o", perm)
+	}
+}
+
+// TestLoggerNoRotation 阈值 0 表示不轮转（保留旧行为，不产生任何 .1 文件）。
+func TestLoggerNoRotation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.log")
+	l, err := NewLoggerRotating(path, true, false, 0, 3)
+	if err != nil {
+		t.Fatalf("new logger: %v", err)
+	}
+	for i := 0; i < 50; i++ {
+		if err := l.Write(&Event{RequestID: "x"}); err != nil {
+			t.Fatalf("write %d: %v", i, err)
+		}
+	}
+	_ = l.Close()
+	if _, err := os.Stat(path + ".1"); !os.IsNotExist(err) {
+		t.Fatalf("maxSize=0 时不应轮转")
+	}
+}
+
+// TestLoggerRotationSizeAccounting 重启后要接着已有文件的长度计算，不能从 0 重新数。
+//
+// 若 size 每次启动都归零，「文件已经很大但阈值永远算不到」会让轮转彻底失效。
+func TestLoggerRotationSizeAccounting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.log")
+	l1, err := NewLoggerRotating(path, true, false, 0, 3)
+	if err != nil {
+		t.Fatalf("new logger: %v", err)
+	}
+	for i := 0; i < 10; i++ {
+		_ = l1.Write(&Event{RequestID: "x"})
+	}
+	_ = l1.Close()
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+
+	// 用「比当前文件略大一点」的阈值重启：下一次写入就必须触发轮转
+	l2, err := NewLoggerRotating(path, true, false, before.Size()+1, 2)
+	if err != nil {
+		t.Fatalf("new logger: %v", err)
+	}
+	if err := l2.Write(&Event{RequestID: "trigger"}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = l2.Close()
+
+	if _, err := os.Stat(path + ".1"); err != nil {
+		t.Fatalf("重启后未按已有文件长度计算阈值，轮转失效: %v", err)
 	}
 }

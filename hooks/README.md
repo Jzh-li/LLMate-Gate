@@ -29,8 +29,14 @@
 2. 配置环境变量（建议放进 shell profile 或 Claude Code 的 env）：
    ```bash
    export LMGATE_GATEWAY="http://127.0.0.1:8400"   # 网关地址
-   export LMGATE_AUTH_TOKEN="<与网关 auth_token 一致>" # 鉴权
+   export LMGATE_AUTH_TOKEN="<与网关 auth_token 一致>" # 鉴权（数据面令牌即可）
    ```
+   网关未配置 `auth_token` 时会自动生成一个并写入 `./auth_token`（0600），启动日志里
+   也会打印一次。取它填到这里即可，重启后不变。
+
+   若网关单独配置了 `gateway.control_auth_token`，hooks 用的这个数据面令牌**不能**
+   访问 `/v1/privacy/restore`——还原原文需要控制面令牌。这是刻意的：判定「拦还是放」
+   只需要数据面权限。
 
 3. 依赖：`python3`（stdlib 即可，**零外部依赖**）。
 

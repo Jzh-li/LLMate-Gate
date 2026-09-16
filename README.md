@@ -307,6 +307,16 @@ gateway:
   listen: ":8400"
   upstream: "https://api.openai.com"
   auth_token: "${GATEWAY_AUTH_TOKEN}"
+  # 未配置 auth_token 时（含环境变量展开后为空）：自动生成随机令牌，写入
+  # auth_token_file（默认 ./auth_token，权限 0600），启动日志打印一次；重启复用，
+  # 所以客户端只需配置一次。
+  #
+  # 「不鉴权」必须显式声明：无鉴权 + 已配 upstream_api_key 意味着任何能连到端口的人
+  # 都能用你的 key 调上游。所以别指望「忘写 auth_token」来免密，那只会得到 401。
+  # allow_unauthenticated: true          # 显式关闭鉴权（仅限不可被他人访问的接口）
+  # control_auth_token: "${GATEWAY_CONTROL_TOKEN}"
+  #   ↑ 控制面 /v1/privacy/*（能按 request_id 还原原文）的独立令牌，留空回退 auth_token。
+  #     给 hooks 的凭据不必同时具备「还原任意历史请求原文」的能力。
   # 可选：按协议分别声明上游。不写则只有上面那一条 openai 上游。
   upstreams:
     - protocol: "anthropic"                 # /v1/messages 走这里

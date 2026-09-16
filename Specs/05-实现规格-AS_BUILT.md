@@ -148,18 +148,23 @@ recordAudit（20 字段）→ /metrics 计数 → publish(restore.done)
 
 ### 2.2 鉴权
 
-`server.go:137-165`。`gateway.auth_token` 为空则完全不鉴权；非空时接受两种凭证：
+`server.go`。路由分三层，各自独立（`Server.Handler`）：
 
-- `Authorization: Bearer <token>`
-- `X-Api-Key: <token>`
+| 面 | 路径 | 令牌 |
+|---|---|---|
+| 探针 | `/healthz` | **不鉴权**（匿名可访问） |
+| 数据面 | `/v1/*`（LLM 转发）、`/metrics` | `gateway.auth_token` |
+| 控制面 | `/v1/privacy/redact`、`/v1/privacy/restore` | `gateway.control_auth_token`，留空回退数据面令牌 |
 
-不匹配返回 401 + `{"error":{"code":"unauthorized","message":...}}`。
+令牌解析在 `config.ResolveAuthToken`：`auth_token` 非空 → 用它；否则若 `allow_unauthenticated: true` → 不鉴权；否则读 `auth_token_file`（不存在则生成 32 字节随机令牌、`0600` 落盘、启动日志打印一次）。**空令牌只可能来自显式的 `allow_unauthenticated`。**
 
-> 注意：鉴权中间件**覆盖全部路由**，包括常驻隐私 API。这是刻意的——该 API 能读回明文 PII。
+接受两种凭证形式：`Authorization: Bearer <token>`、`X-Api-Key: <token>`，用 `crypto/subtle.ConstantTimeCompare` 比较。不匹配返回 401 + `{"error":{"code":"unauthorized","message":"missing or invalid credentials for <scope>"}}`。
+
+> 升级须知：`auth_token` 为空**不再**等于不鉴权；`/metrics` 现在需要数据面令牌。
 
 ### 2.3 隐私 API 契约
 
-`/v1/privacy/redact` 支持三种形态（`proxy/privacy.go:99-235`）：
+`/v1/privacy/redact` 支持三种形态（`proxy/privacy.go`）：
 
 | 入参 | 行为 |
 |---|---|
@@ -168,6 +173,8 @@ recordAudit（20 字段）→ /metrics 计数 → publish(restore.done)
 | `{"gate_only": true}` | **只扫描不改写**：返回 `has_pii` / `entities` / `blocked`，不建 request_id |
 
 `gate_only` 是给 Claude Code hooks / MCP 这类「先看 PII 再决定拦放」的边界用的，`block_types` 可指定「只对哪些类型判定 blocked」，留空表示任意 PII 命中即 blocked。
+
+`entities[].value`（命中原文）**默认不回显**，需要判定拦放时 `type` 已足够；要拿到原文需显式传 `include_values: true`。理由是默认回显会让网关同时成为一个「提交文本 → 取出其中 PII」的提取接口。
 
 返回 `request_id` 后，`/v1/privacy/restore` 可多次还原同一 `request_id`（映射表按 id 存放，不是一次性）。
 

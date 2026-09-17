@@ -10,7 +10,7 @@
 
 | 项 | 状态 |
 |---|---|
-| **HEAD** | `51a9040`，工作树干净，**与 origin/main 同步**（2026-09-17 共推送 8 个提交） |
+| **HEAD** | `f973540`，工作树干净，**与 origin/main 同步**（2026-09-17 共推送 10 个提交） |
 | **语料副本** | `bench/` 子模块本机为空目录；语料工作副本 = 独立克隆 `/home/jzhli/cn-pii-bench`，`dev` @ `b9533c1`（见 §3.2 第 6 坑） |
 | **仓可见性** | ✅ public（anonymous 可 clone） |
 | **Release** | ✅ `v0.1.0` 已发布：7 assets（6 平台 + SHA256SUMS） |
@@ -461,6 +461,7 @@ git stash && git push origin <branch>    # 或先 rebase 到 origin/main 再推
 | `f8ee620` | `vscode-ext` 类型检查接入 CI（第 11 个 job） |
 | `6a7ba89` | bump `bench` 子模块 gitlink `b2a1a0a → c8db66d`，修掉 bench-gate 红灯；补记推送凭据（§3.5） |
 | `51a9040` | HANDOFF 记录 CI 11/11 全绿与 bench-gate 红灯的真因（§13 末） |
+| `f973540` | **对外口径修正**：README 首屏三处不再把 PII Engineer 当现役引擎、架构图 `Rust → Go`、路线图两条过期待办改写；HANDOFF 补第 6 个环境坑与独立克隆路径（详见 §5「09-17：对外口径修正」） |
 
 ### bench-gate 红灯的真因（值得记住的失效模式）
 

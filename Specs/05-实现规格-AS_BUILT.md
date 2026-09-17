@@ -660,8 +660,13 @@ python3 carriers.py --base-url http://127.0.0.1:8413      # 不带 --limit，跑
 ```bash
 python3 carriers.py --base-url http://127.0.0.1:8413 --gate
 python3 bench_runner_adversarial.py --endpoint http://127.0.0.1:8413/v1/privacy/redact \
-  --report --min-precision 0.99 --min-recall 0.60
+  --report --gate-on span --min-precision 0.99 --min-recall 0.46
 ```
+
+> ⚠️ **2026-09-17 起阈值与口径都变了**（本节其余文字未动，勿照旧值执行）：
+> `--min-recall` 由 `0.60` 改为 **`0.46`**，并显式加 `--gate-on span`（此前靠脚本默认值）。
+> 原因是门禁锚定的 28 条基线语料在 09-16 修订过（GT 37 → 48），基线由 span R=0.6216 变为 0.4792 ——
+> **阈值只是跟随基线，防回归语义不变**。推算与实测见 `HANDOFF.md` §13 末。
 
 判读顺序：**先看 L2 载体 regression 是否为 0**（泄漏级，最敏感，能抓到 span 级指标看不见的泄漏），再看真对抗 P/F1，最后才看合成语料（自作者语料 F1=1.0 只说明「检测器与生成器口径一致」，不构成结论）。
 
@@ -684,8 +689,13 @@ python3 bench_runner_adversarial.py --endpoint http://127.0.0.1:8413/v1/privacy/
 > | 悲观（弱点计 FN） | 1.0000 | 0.4694 | **0.6389** |
 >
 > 另有 318 条「表面形式 × 载体」矩阵语料（`cases_adversarial_ext.jsonl`）：
-> span **0.5946** / strict 0.5863 —— 专用于**定位形态缺口**，**不接 CI 门禁**。
+> span **0.5946** / strict 0.5863 —— 专用于**定位形态缺口**，**不参与门禁判定**；
+> 但自 2026-09-17 起它以「形态诊断（非门禁）」步骤在 CI 的 `bench-gate` job 里**每轮运行**
+> （带 `--report`、不带阈值，报告随 artifact 上传），好让缺口数字不再只存在于本地报告。
 > 合成中文 / 英文两个语料与 p50/p95/p99 延迟**本轮未复跑**，沿用本节记录。
+>
+> **门禁对齐（2026-09-17）**：`bench` 子模块 gitlink 已由 `c8db66d` 前移到 dev HEAD `b377e16`，
+> 即 CI 现在用的是**修订后**的语料（此前是「修复后的评估器 + 修订前的语料」，尺子与库存不一致）。
 >
 > **本节的下述表格作为 09-15 那一次实测的历史记录保留**，不作为当前对外口径。
 

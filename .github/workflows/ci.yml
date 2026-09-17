@@ -292,18 +292,43 @@ jobs:
             --gate
 
       # 真对抗阈值守门。阈值放在这里而不是脚本里，是为了让「当前承诺的底线」
-      # 在 review 中显式可见。基线（2026-09-15）：P=1.0000 R=0.6216 F1=0.7667。
+      # 在 review 中显式可见。
+      #
+      # 口径说明（2026-09-17 语料修订后定案）：
+      #   · 门禁口径 = **span**（主口径），故显式传 --gate-on span。此前不传、靠脚本
+      #     默认值（恰好也是 span），读 CI 的人无法确认比的是哪个口径。
+      #   · 基线（gitlink b9533c1，28 条 / GT 48）：span P=1.0000 R=0.4792 F1=0.6479；
+      #     strict R=0.4375 与悲观 R=0.4694 是下界，**不进门槛**。
+      #   · 阈值 0.46 的来历：指标是**确定性**的（regex 引擎 + 固定语料，无抖动），
+      #     1 个实体 = 1/48 ≈ 0.0208，所以 0.46 恰好能拦下「≥1 个实体的退化」。
+      #     门禁语义是**防回归**，不是理想值 —— 基线一动，阈值必须同步动。
+      #   · 与 2026-09-15 的 0.6216/0.7667 不可比：那不是引擎变差，是语料修订让
+      #     度量变准（GT 37 → 48，修掉「模板内联真 PII 未标注」与地址粒度自相矛盾）。
       # 精确率门槛压得很高：误报会改写正常对话内容，比漏检更容易被用户察觉。
-      # 召回率低是**已声明的设计边界**（弱格式实体依赖 NER sidecar），
-      # 所以只防回归、不设理想值。
-      - name: 真对抗阈值守门
+      # 召回率低是**已声明的设计边界**（弱格式实体依赖 NER sidecar 或形态归一化，
+      # 见 HANDOFF §5「v1.1 决策入口」），所以只防回归、不设理想值。
+      - name: 真对抗阈值守门（28 条基线语料）
         run: |
           python3 bench/bench_runner_adversarial.py \
             --endpoint http://127.0.0.1:8401/v1/privacy/redact \
             --out "${RUNNER_TEMP}/bench-reports" \
             --report \
+            --gate-on span \
             --min-precision 0.99 \
-            --min-recall 0.60
+            --min-recall 0.46
+
+      # 矩阵语料（318 条 / GT 338）**只看不判**。
+      # 它专挑检测器最弱的书写形态采样，召回（span 0.4231）必然低于阈值，
+      # 直接进门禁会让 CI 常红 —— 但让缺口「每轮可见」是有价值的：
+      # 此前它的数字只存在于本地报告里，CI 上完全看不到形态覆盖缺口。
+      # 等形态容忍（HANDOFF §5 待拍板项）落地后，再决定是否升为门禁。
+      - name: 矩阵语料形态诊断（非门禁）
+        run: |
+          python3 bench/bench_runner_adversarial.py \
+            --endpoint http://127.0.0.1:8401/v1/privacy/redact \
+            --cases bench/fixtures/cases_adversarial_ext.jsonl \
+            --out "${RUNNER_TEMP}/bench-reports" \
+            --report
 
       - name: 上传 bench 报告
         if: always()

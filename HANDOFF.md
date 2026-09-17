@@ -10,7 +10,7 @@
 
 | 项 | 状态 |
 |---|---|
-| **HEAD** | 工作树干净；**本地领先 origin/main 6 个提交（尚未 push）** —— 清单见 `git log --oneline origin/main..HEAD`，逐条说明见 §12 |
+| **HEAD** | `f8ee620`，工作树干净，**与 origin/main 同步**（2026-09-17 已推送 6 个提交） |
 | **仓可见性** | ✅ public（anonymous 可 clone） |
 | **Release** | ✅ `v0.1.0` 已发布：7 assets（6 平台 + SHA256SUMS） |
 | **CI** | ✅ 10 job 全绿，但**停在 `2941f5b`**（verify / build / e2e / coverage / bench / bench-gate / bench-baseline / lint / perf / vuln）；本地 5 个提交**尚未在 CI 上跑过**，推送后 job 数变为 **11**（新增 `vscode-ext` typecheck） |
@@ -125,10 +125,22 @@ $PY runner.py --endpoint http://127.0.0.1:8401/_api/detect \
 
 ```bash
 export HOME=/home/jzhli
+
+# 推送/拉取必须显式指定密钥与 known_hosts —— 两个坑叠在一起：
+#   1) 私钥在**非标准位置** ~/.githubkeys/（~/.ssh 下只有 known_hosts，没有私钥）；
+#   2) ssh 取的是 passwd 里的 home（root → /root），`env HOME=` 对它**无效** ——
+#      所以即使 ~/.ssh/config 里写了 IdentityFile 也不会被读到。
+export GIT_SSH_COMMAND="ssh -i /home/jzhli/.githubkeys/id_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=/home/jzhli/.ssh/known_hosts -o BatchMode=yes"
+
 git -C /home/jzhli/LLMate-Gate fetch origin          # 推送前必做，见 §9
 git -C /home/jzhli/LLMate-Gate commit -m "..."       # 项目级身份已是 jzh-li <jzh-li@outlook.com>
 git -C /home/jzhli/LLMate-Gate push origin main
 ```
+
+> `~/.githubkeys/install_to_ssh.sh` 可把私钥装进 `~/.ssh` 并写 `~/.ssh/config`，
+> 但**对以 root 身份运行的工具链仍无效**（ssh 读的是 `/root/.ssh`），
+> 所以上面这种显式 `GIT_SSH_COMMAND` 写法最稳。`Could not create directory '/root/.ssh'`
+> 是无害警告，不影响连接。
 
 **提交身份硬约束**：author/committer 必须是 `jzh-li <jzh-li@outlook.com>`。**绝不**出现 `workbuddy@local` / `noreply@workbuddy.ai` / commit message 末尾的 `Co-Authored-By` / 任何工具署名或 `.workbuddy` 字样（改用「本地数据目录」）。
 

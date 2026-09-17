@@ -10,15 +10,16 @@
 
 | 项 | 状态 |
 |---|---|
-| **HEAD** | `f973540`，工作树干净，**与 origin/main 同步**（2026-09-17 共推送 10 个提交） |
-| **语料副本** | `bench/` 子模块本机为空目录；语料工作副本 = 独立克隆 `/home/jzhli/cn-pii-bench`，`dev` @ `b9533c1`（见 §3.2 第 6 坑） |
+| **HEAD** | `c066ebb`，工作树干净，**与 origin/main 同步**（2026-09-17 共推送 12 个提交） |
+| **语料副本** | `bench/` 子模块本机为空目录；语料工作副本 = 独立克隆 `/home/jzhli/cn-pii-bench`，`dev` @ `b377e16`（见 §3.2 第 6 坑） |
 | **仓可见性** | ✅ public（anonymous 可 clone） |
 | **Release** | ✅ `v0.1.0` 已发布：7 assets（6 平台 + SHA256SUMS） |
-| **CI** | ✅ **11 job 全绿 @ `51a9040`**（verify / build / e2e / coverage / bench / bench-gate / bench-baseline / lint / **vscode-ext** / perf / vuln） |
+| **CI** | ✅ **11 job 全绿 @ `c066ebb`**（verify / build / e2e / coverage / bench / bench-gate / bench-baseline / lint / **vscode-ext** / perf / vuln） |
 | **Go 版本** | CI `1.25.13`；`gateway/go.mod` 声明 `go 1.24` |
 | **合成语料 F1** | 1.0000（中文 240 + 英文 180）—— **过拟合基线，不是对外宣称值** |
 | **真对抗 F1** | span **0.6479**（主口径）/ strict **0.5915**（下界）/ 悲观 0.6389（28 条 / 48 GT） |
-| **真对抗矩阵 F1** | span **0.5946** / strict 0.5863（318 条 / 338 GT；形态诊断用，**暂不进门禁**） |
+| **门禁阈值** | `bench-gate` 的真对抗守门：**span 口径**，`--min-precision 0.99` / `--min-recall 0.46`，gitlink @ `b377e16`（2026-09-17 起与语料对齐，见 §13 末） |
+| **真对抗矩阵 F1** | span **0.5946** / strict 0.5863（318 条 / 338 GT；**不参与门禁判定**，但自 09-17 起作为「形态诊断（非门禁）」步骤每轮进 CI） |
 | **自身暴露面** | ✅ 三/四面凭据分级 + 越权读取收口（映射表来源隔离 + 统一 404）+ 调试面板归控制面；`e2e/security.sh` S1-S6 共 32 断言已进 CI |
 | **本机实测复现** | ✅ 09-15 三语料全跑复现当时记录值；09-16 语料修订后**真对抗已复跑**（span 0.6479），合成 / 英文未复跑 —— 见 `Specs/05` §10 勘误 |
 | **已知缺陷** | **0 项待修**（`Specs/06` 摘要表全 ✅ 闭环；P2-14 复核判定为可接受） |
@@ -484,6 +485,8 @@ git stash && git push origin <branch>    # 或先 rebase 到 origin/main 再推
 | `6a7ba89` | bump `bench` 子模块 gitlink `b2a1a0a → c8db66d`，修掉 bench-gate 红灯；补记推送凭据（§3.5） |
 | `51a9040` | HANDOFF 记录 CI 11/11 全绿与 bench-gate 红灯的真因（§13 末） |
 | `f973540` | **对外口径修正**：README 首屏三处不再把 PII Engineer 当现役引擎、架构图 `Rust → Go`、路线图两条过期待办改写；HANDOFF 补第 6 个环境坑与独立克隆路径（详见 §5「09-17：对外口径修正」） |
+| `19b67ef` | HANDOFF 记为上一轮（对外口径修正） |
+| `c066ebb` | **CI 口径对齐**：`bench` gitlink `c8db66d → b377e16`、`--min-recall` 0.60 → **0.46**、显式 `--gate-on span`、新增矩阵语料形态诊断（非门禁）步骤；四份文档同步（详见 §5「09-17：CI 口径对齐」与本节末） |
 
 ### bench-gate 红灯的真因（值得记住的失效模式）
 
@@ -523,4 +526,13 @@ CI 随即 **11/11 全绿**。
 
 顺带新增一步 **「矩阵语料形态诊断（非门禁）」**：矩阵语料带 `--report` 但**不带阈值**运行，
 报告随 artifact 上传。此前它的数字只存在于本地报告，CI 上完全看不到形态覆盖缺口。
+
+落实为 `c066ebb`（LLMate-Gate）+ `b377e16`（cn-pii-bench `dev`）。
+本地按 CI 的新命令行彩排三段全 exit 0（L2 / 阈值守门 span R=0.4792 ≥ 0.46 / 矩阵诊断）；
+推送后 CI **11/11 全绿 @ `c066ebb`**。
+
+> **仍未决**：`.gitmodules` 写 `branch = main`，而本仓活跃线是 `dev`，本次 `main` 又落后 4 个提交。
+> 两条路 —— **(a)** 每轮收口把 `dev` 快进进 `main`；**(b)** 废弃 `main`、默认分支设 `dev`
+> 并同步改 `.gitmodules`。**倾向 (b)**（只有一条活跃线，两个分支名即两个真相）。
+> 属远程破坏性操作，**等明确拍板**；详见 `Specs/06` 末的同名记录。
 

@@ -10,10 +10,10 @@
 
 | 项 | 状态 |
 |---|---|
-| **HEAD** | `f8ee620`，工作树干净，**与 origin/main 同步**（2026-09-17 已推送 6 个提交） |
+| **HEAD** | `6a7ba89`，工作树干净，**与 origin/main 同步**（2026-09-17 共推送 7 个提交） |
 | **仓可见性** | ✅ public（anonymous 可 clone） |
 | **Release** | ✅ `v0.1.0` 已发布：7 assets（6 平台 + SHA256SUMS） |
-| **CI** | ✅ 10 job 全绿，但**停在 `2941f5b`**（verify / build / e2e / coverage / bench / bench-gate / bench-baseline / lint / perf / vuln）；本地 5 个提交**尚未在 CI 上跑过**，推送后 job 数变为 **11**（新增 `vscode-ext` typecheck） |
+| **CI** | ✅ **11 job 全绿 @ `6a7ba89`**（verify / build / e2e / coverage / bench / bench-gate / bench-baseline / lint / **vscode-ext** / perf / vuln） |
 | **Go 版本** | CI `1.25.13`；`gateway/go.mod` 声明 `go 1.24` |
 | **合成语料 F1** | 1.0000（中文 240 + 英文 180）—— **过拟合基线，不是对外宣称值** |
 | **真对抗 F1** | span **0.6479**（主口径）/ strict **0.5915**（下界）/ 悲观 0.6389（28 条 / 48 GT） |
@@ -423,3 +423,32 @@ git stash && git push origin <branch>    # 或先 rebase 到 origin/main 再推
 > **数字口径变更**：语料修订后真对抗 28 条基线由 `strict 0.7667 / 悲观 0.7188`（`Specs/05` §10）
 > 变为 `span 0.6479 / strict 0.5915 / 悲观 0.6389`。**新旧不可比** —— 详见 §0 说明与
 > `cn-pii-bench/README.md`「语料修订」节。
+
+---
+
+## 13. 历史收口记录（2026-09-17）
+
+| 提交 | 内容 |
+|---|---|
+| `f68a17d` | 同步四份文档到 09-16 收口后的真实状态（HANDOFF / README / `Specs/05` / `Specs/06`） |
+| `f8ee620` | `vscode-ext` 类型检查接入 CI（第 11 个 job） |
+| `6a7ba89` | bump `bench` 子模块 gitlink `b2a1a0a → c8db66d`，修掉 bench-gate 红灯；补记推送凭据（§3.5） |
+
+### bench-gate 红灯的真因（值得记住的失效模式）
+
+推送后才暴露（09-16 的提交此前**从未在 CI 上跑过**）。它的表现是「检测能力退化」，
+实质是**评估器与网关的隐式契约断裂**：
+
+1. `dfbd2b2` 把 `gate_only` 响应的 `entities[].value` 默认改为**不回显**；
+2. 但 submodule 的 gitlink 停在 `b2a1a0a`，那一版 `bench_runner_adversarial.py` 不带 `include_values: true`；
+3. 于是每条有检出的样本都在 KeyError 上被记成 err（28 条里 17 条）→ `TP=0 P=0 R=0 F1=0`，
+   而门禁只报「recall=0.0000 < 0.6000」—— 把「尺子断了」说成了「标准没达到」。
+
+修法是把 gitlink 前移**一个**提交到 `c8db66d`（含评估器修复，**不**含语料修订）。
+本机实测 `Errors: 0 / TP=23 FP=0 FN=14 / P=1.0000 R=0.6216 F1=0.7667`（与 `Specs/05` §10 逐位一致），
+CI 随即 **11/11 全绿**。
+
+> ⚠️ **遗留（待拍板）**：语料修订（GT 37 → 48）在 `249b030` 及之后，**不在**本次前移范围内。
+> 若把 gitlink 直接前移到 dev HEAD，召回会变为 span 0.4792，低于现有阈值 0.60 ——
+> 需要「基线变更 + 阈值同步」一起决策。另：cn-pii-bench 的 `main` 落后 dev 三个提交，
+> 是否继续维护待定。

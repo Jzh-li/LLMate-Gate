@@ -10,10 +10,10 @@
 
 | 项 | 状态 |
 |---|---|
-| **HEAD** | `2f27b8f`，工作树干净，**本地领先 origin/main 4 个提交（尚未 push）** |
+| **HEAD** | 工作树干净；**本地领先 origin/main 6 个提交（尚未 push）** —— 清单见 `git log --oneline origin/main..HEAD`，逐条说明见 §12 |
 | **仓可见性** | ✅ public（anonymous 可 clone） |
 | **Release** | ✅ `v0.1.0` 已发布：7 assets（6 平台 + SHA256SUMS） |
-| **CI** | ✅ 10 job 全绿，但**停在 `2941f5b`**（verify / build / e2e / coverage / bench / bench-gate / bench-baseline / lint / perf / vuln）；本地 4 个提交**尚未在 CI 上跑过** |
+| **CI** | ✅ 10 job 全绿，但**停在 `2941f5b`**（verify / build / e2e / coverage / bench / bench-gate / bench-baseline / lint / perf / vuln）；本地 5 个提交**尚未在 CI 上跑过**，推送后 job 数变为 **11**（新增 `vscode-ext` typecheck） |
 | **Go 版本** | CI `1.25.13`；`gateway/go.mod` 声明 `go 1.24` |
 | **合成语料 F1** | 1.0000（中文 240 + 英文 180）—— **过拟合基线，不是对外宣称值** |
 | **真对抗 F1** | span **0.6479**（主口径）/ strict **0.5915**（下界）/ 悲观 0.6389（28 条 / 48 GT） |
@@ -92,7 +92,7 @@ go test -race ./...
 
 | 坑 | 现象 | 绕法 |
 |---|---|---|
-| **`$HOME` 被指向 `/root`** | `failed to initialize build cache at /root/.cache/go-build: permission denied` | 命令里显式 `export HOME=/home/jzhli`，或设 `GOCACHE` |
+| **`$HOME` 被指向 `/root`** | Go：`failed to initialize build cache at /root/.cache/go-build: permission denied`；npm：`error writing to the directory: /root/.npm/_logs` | 命令里显式 `env HOME=/home/jzhli …`（或分别设 `GOCACHE` / `npm_config_cache`） |
 | **`/tmp` 是 10MB tmpfs** | `compile: writing output: ... no space left on device`（Go 默认把编译工作目录放 `$TMPDIR`） | `export TMPDIR=/home/jzhli/.gotmp`（`/home` 有 340G） |
 | **注入的 `http_proxy`** | `git fetch` 返回 502；Go 拉模块异常 | 已全局修好：`git config --global http.https://github.com/.proxy ""`。命令内仍需 `unset http_proxy ...`（Go/curl 会读环境变量） |
 | **代理拦截 127.0.0.1** | `curl` 访问本机端口被劫持，报 `upstream connect failed` | `curl --noproxy '*'`；Python 用显式无代理 opener（`runner.py` 已内置）；**注意**：本机 `127.0.0.1` 直连是通的 |
@@ -235,8 +235,9 @@ P1-19c（job 级联 `needs` 抹掉信号）、B-15~B-19（bench 口径与守门�
 - **清理环境冗余**：两套 Go（`~/.gotoolchain/go` / `~/.local/go`，各约 500M）与两套 GOCACHE
   （`.gocache` 933M / `.cache/go-build` 251M）可合并为一套，约省 1.2G。
   属破坏性操作，**需用户拍板**（见 §3.2 第 5 坑）。
-- **`vscode-ext` typecheck 接入 CI**：现在 `ci.yml` 无 vscode-ext 步骤，
-  本地 `tsc --noEmit` 能过、CI 复现不了 —— 是个真实的门禁缺口。
+- ✅ **`vscode-ext` typecheck 已接入 CI（2026-09-17）**：新增 `vscode-ext` job
+  （`npm ci` + `npm run typecheck`），CI job 数 10 → 11；`package.json` 补了 `typecheck` script。
+  在此之前该扩展没有任何 CI 步骤 —— 本地 `tsc` 能过、CI 复现不了。
 
 ### ⚪ 明确不做
 

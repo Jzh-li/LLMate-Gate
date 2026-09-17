@@ -63,7 +63,8 @@
   },
   "scripts": {
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "typecheck": "tsc --noEmit -p ./"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

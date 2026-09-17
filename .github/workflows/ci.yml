@@ -365,6 +365,30 @@ jobs:
           args: --timeout 5m --config .golangci.yml
           working-directory: gateway
 
+  vscode-ext:
+    name: vscode-ext typecheck
+    # 不写 needs: verify —— 见文件头「job 依赖」：门禁各自独立报结论。
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: vscode-ext/package-lock.json
+
+      # 在此之前 vscode-ext 没有任何 CI 步骤：本地 `tsc --noEmit` 能过，
+      # CI 却复现不了 —— 一次类型写错只在扩展被装上之后才暴露。
+      - name: 安装依赖
+        working-directory: vscode-ext
+        run: npm ci
+
+      - name: 类型检查（不产出 out/）
+        working-directory: vscode-ext
+        run: npm run typecheck
+
   perf:
     name: bench perf guard
     # 不写 needs: verify —— 见文件头「job 依赖」：门禁各自独立报结论。

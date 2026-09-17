@@ -10,10 +10,11 @@
 
 | 项 | 状态 |
 |---|---|
-| **HEAD** | `6a7ba89`，工作树干净，**与 origin/main 同步**（2026-09-17 共推送 7 个提交） |
+| **HEAD** | `51a9040`，工作树干净，**与 origin/main 同步**（2026-09-17 共推送 8 个提交） |
+| **语料副本** | `bench/` 子模块本机为空目录；语料工作副本 = 独立克隆 `/home/jzhli/cn-pii-bench`，`dev` @ `b9533c1`（见 §3.2 第 6 坑） |
 | **仓可见性** | ✅ public（anonymous 可 clone） |
 | **Release** | ✅ `v0.1.0` 已发布：7 assets（6 平台 + SHA256SUMS） |
-| **CI** | ✅ **11 job 全绿 @ `6a7ba89`**（verify / build / e2e / coverage / bench / bench-gate / bench-baseline / lint / **vscode-ext** / perf / vuln） |
+| **CI** | ✅ **11 job 全绿 @ `51a9040`**（verify / build / e2e / coverage / bench / bench-gate / bench-baseline / lint / **vscode-ext** / perf / vuln） |
 | **Go 版本** | CI `1.25.13`；`gateway/go.mod` 声明 `go 1.24` |
 | **合成语料 F1** | 1.0000（中文 240 + 英文 180）—— **过拟合基线，不是对外宣称值** |
 | **真对抗 F1** | span **0.6479**（主口径）/ strict **0.5915**（下界）/ 悲观 0.6389（28 条 / 48 GT） |
@@ -88,7 +89,7 @@ go build -o ../.build/llmate-gate ./cmd/llmate-gate
 go test -race ./...
 ```
 
-### 3.2 五个环境坑（下个会话直接绕开）
+### 3.2 六个环境坑（下个会话直接绕开）
 
 | 坑 | 现象 | 绕法 |
 |---|---|---|
@@ -97,6 +98,7 @@ go test -race ./...
 | **注入的 `http_proxy`** | `git fetch` 返回 502；Go 拉模块异常 | 已全局修好：`git config --global http.https://github.com/.proxy ""`。命令内仍需 `unset http_proxy ...`（Go/curl 会读环境变量） |
 | **代理拦截 127.0.0.1** | `curl` 访问本机端口被劫持，报 `upstream connect failed` | `curl --noproxy '*'`；Python 用显式无代理 opener（`runner.py` 已内置）；**注意**：本机 `127.0.0.1` 直连是通的 |
 | **两套 Go / 两套缓存并存** | `~/.gotoolchain/go` 与 `~/.local/go` 都是 1.25.13；GOPATH/GOCACHE 也有两套（`.gopath`+`.gocache` ↔ `go`+`.cache/go-build`），合计约 1.8G | 用任一套都能构建，但**别混用**（会各建一份缓存，白等一轮）。冗余是否清理见 §5「可选」 |
+| **`git submodule` 子命令不可用** | `git submodule status` 直接失败：`/usr/lib/git-core/git-submodule: 19: .: git-sh-setup: not found`（Debian 的包装脚本缺 `git-sh-setup`） | 本机**不要依赖任何 `git submodule` 子命令**（含 `update --init`）。`bench/` 是空目录，语料工作一律走独立克隆 `/home/jzhli/cn-pii-bench`，见 §3.4 |
 
 ### 3.3 跑冒烟（本机实测流程）
 
@@ -114,8 +116,11 @@ curl -sS --noproxy '*' -X POST http://127.0.0.1:8401/_api/detect \
 
 ### 3.4 跑 bench
 
+⚠️ **不要写 `cd cn-pii-bench`** —— 仓内 `bench/` 在本机是**空目录**（子模块未拉取，且 `git submodule update --init` 也执行不了，见 §3.2 第 6 坑）。
+语料的实际工作副本是**独立克隆** `/home/jzhli/cn-pii-bench`（分支 `dev`，与 submodule 同源）；对外引用才用 `bench/…` 形式。
+
 ```bash
-cd cn-pii-bench
+cd /home/jzhli/cn-pii-bench
 PY=/home/jzhli/.workbuddy/binaries/python/versions/3.13.12/bin/python3   # 需 3.10+（用了 `X | None` 语法）
 $PY runner.py --endpoint http://127.0.0.1:8401/_api/detect \
     --cases fixtures/cases_adversarial.jsonl --engine regex --out ./reports
@@ -156,7 +161,7 @@ git -C /home/jzhli/LLMate-Gate push origin main
 | `gateway/pkg/` | types（实体权威表）/ cn / global |
 | `gateway/debug/` | 内嵌面板（Hub + Store + Handler + assets） |
 | `gateway/configs/` | 配置示例 + 冒烟模板 |
-| `bench/` | cn-pii-bench 子模块（**本机尚未拉取内容**，见 §5） |
+| `bench/` | cn-pii-bench 子模块。**本机为空目录**，工作副本在独立克隆 `/home/jzhli/cn-pii-bench`（见 §3.4） |
 | `Specs/` | 00~04 规划文档 + **05 实现规格** + **06 优化点** |
 | `hooks/` `vscode-ext/` `scoop-bucket/` `scripts/` | 集成与分发 |
 | `.workbuddy/` | 会话日志（**gitignored**，不随 git 走） |
@@ -207,7 +212,8 @@ P1-19c（job 级联 `needs` 抹掉信号）、B-15~B-19（bench 口径与守门�
 `cn-pii-bench/README.md`「检测质量线：形态覆盖缺口」节），改动落在核心检测逻辑且会**扩大脱敏范围**，
 **待用户拍板后再动**。
 
-另：`bench/` 子模块在本机是**空目录**，需 `git submodule update --init` 后才有内容。
+另：`bench/` 子模块在本机是**空目录**，且 `git submodule update --init` 执行不了（§3.2 第 6 坑）。
+语料改动一律在独立克隆 `/home/jzhli/cn-pii-bench`（分支 `dev`）上做、推 `dev`，仓内 gitlink 是否 bump 另行决策。
 
 ### ✅ 09-16 加固：自身暴露面收口（两轮 / 2 个提交）
 
@@ -225,6 +231,22 @@ P1-19c（job 级联 `needs` 抹掉信号）、B-15~B-19（bench 口径与守门�
 控制面令牌挡住「同机反向代理把 `RemoteAddr` 变成 127.0.0.1」（前者的盲区）。
 设计细节与验收证据见 `Specs/07` §8。
 
+### ✅ 09-17：对外口径修正（纯文档，无代码改动）
+
+复核两仓后发现**公开仓首屏与实现自相矛盾**，本轮修掉：
+
+| 处 | 问题 | 修法 |
+|---|---|---|
+| README 核心特性第 1 条 | 写「集成 PII Engineer（F1 0.918）」并称其覆盖人名 / 地址，读起来像现役引擎 | 改为：默认引擎是内置中文正则、覆盖格式固定实体；人名 / 地址靠**登记表**；PII Engineer **默认未启用** |
+| README 架构图 | 标 `Shared Core (Rust)` + `PII Engineer (ONNX)` 为唯一检测器 | 改 `Shared Core (Go)`；检测器列两行——「内置中文正则（默认）」+「PII Engineer sidecar（可选，默认未启用）」 |
+| README 请求生命周期 §2 | 「送入 PII Engineer，中文实体 F1 0.918」 | 改为「送入当前配置的检测引擎」，并指向实测数据节 |
+| README 路线图 | 「NER 集成 ROI 待真实对抗语料验证」已过期；v2 仍把「真实对抗语料」列为未来项 | 改写为 ROI **已实测**（sidecar span 0.9091 / 与 regex 融合 0.9787，阻塞是延迟不是质量）；v2 改为「弱格式实体完整召回：归一化 或 NER」 |
+| HANDOFF §3.2 / §3.4 / §4 / §5 | 四处都让读者 `cd cn-pii-bench` 或 `git submodule update --init`，本机两条路径都走不通 | 统一指向独立克隆 `/home/jzhli/cn-pii-bench`；§3.2 新增**第 6 个环境坑** |
+
+> **判定口径（后续维护按此自查）**：README 里凡出现 F1 数字，必须是**本项目实测值**并标明口径
+> （span / strict、语料名）；PII Engineer 的 0.918 只能出现在「可选 sidecar 规格」语境，且必须带
+> 「默认未启用」标记。这条与 §0 的「诚实口径提示」是同一件事的两端。
+
 ### ⚪ v1.1 决策入口：真对抗盲区 → 是否上 NER
 
 > **本轮（09-16）矩阵语料独立复现了这个结论**：`zh_person_name` / `zh_address` 在 28 条基线语料中
@@ -236,8 +258,13 @@ P1-19c（job 级联 `needs` 抹掉信号）、B-15~B-19（bench 口径与守门�
 | `zh_address` | 0.0 | 行政区划词典 + 后缀模式 |
 | `id_card_masked` | 0.0 | 允许 `*` 通配的身份证正则 |
 
+- **ROI 已实测完毕（不再需要"验证"）**：`cn-pii-bench` 任务 0.5 已跑通 NER sidecar ——
+  单跑真对抗 span F1 **0.9091** / strict 0.8409，与 `regex` **融合后 span 0.9787** / strict 0.8842。
+  ⇒ **质量早已够用，唯一阻塞是延迟**：sidecar p50 **3.4s**，而网关单请求硬超时 **500ms**。
+  所以这个决策的实质是「愿不愿意为它改请求路径」（异步化 / 放宽超时 / 只对弱格式实体走模型），
+  **不是**「模型够不够准」。
 - **触发条件**：用户决定"要打真实场景"时启；否则 v1 以 regex 引擎能力范围为声明即可
-- 成本参考：PII Engineer 公开规格 F1=0.918（英文维度），集成工作量 = 多日
+- 成本参考：集成工作量 = 多日，**主体在延迟架构，不在模型接入**
 - **注意**：这三项都是 `regex.go:14-19` 明确声明的设计边界，不是 bug
 
 ### 🟢 可选
@@ -433,6 +460,7 @@ git stash && git push origin <branch>    # 或先 rebase 到 origin/main 再推
 | `f68a17d` | 同步四份文档到 09-16 收口后的真实状态（HANDOFF / README / `Specs/05` / `Specs/06`） |
 | `f8ee620` | `vscode-ext` 类型检查接入 CI（第 11 个 job） |
 | `6a7ba89` | bump `bench` 子模块 gitlink `b2a1a0a → c8db66d`，修掉 bench-gate 红灯；补记推送凭据（§3.5） |
+| `51a9040` | HANDOFF 记录 CI 11/11 全绿与 bench-gate 红灯的真因（§13 末） |
 
 ### bench-gate 红灯的真因（值得记住的失效模式）
 

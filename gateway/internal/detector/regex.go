@@ -20,6 +20,11 @@ import (
 type RegexEngine struct {
 	opts  *options
 	rules []rule
+	// shapeRules 是只在「归一化窗口」上跑的形态专用规则（国家码 / 点分号码）。
+	shapeRules []rule
+	// windowRules 是窗口那一遍要跑的规则全集 = rules 里形态敏感的通用规则 + shapeRules。
+	// 与 rules 同源（构造时按类型过滤），保证两条路径的判定不会各写一份。
+	windowRules []rule
 }
 
 type rule struct {
@@ -30,7 +35,7 @@ type rule struct {
 	//   - entityType 为空时回退到 rule.entityType；
 	//   - ok=false 时跳过该匹配；
 	//   - 部分规则（银行卡/信用卡 dispatch）通过返回值动态指定 type。
-	validate   func(string) (string, bool)
+	validate func(string) (string, bool)
 	// digitBoundary 为 true 时，要求匹配左右邻字符不是数字（RE2 不支持 lookaround，
 	// 因此用手工边界检查替代 (?<!\d)/(?!\d)）。
 	digitBoundary bool
@@ -46,15 +51,15 @@ var (
 	// Visa 13/16/19, MasterCard 16, Amex 15, Disc 16, JCB 15-16, UPI 16-19。
 	// 范围 13-19；zh_bank_card / credit_card 的区分由 cardDispatch 按 IIN 前缀 + Luhn 动态裁决。
 	reCreditCard = regexp.MustCompile(`[0-9]{13,19}`)
-	reEmail    = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)
-	reIPv4     = regexp.MustCompile(`(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])`)
-	reDate     = regexp.MustCompile(`(?:19|20)[0-9]{2}[-/.年](?:0?[1-9]|1[0-2])[-/.月](?:0?[1-9]|[12][0-9]|3[01])日?`)
+	reEmail      = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)
+	reIPv4       = regexp.MustCompile(`(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])`)
+	reDate       = regexp.MustCompile(`(?:19|20)[0-9]{2}[-/.年](?:0?[1-9]|1[0-2])[-/.月](?:0?[1-9]|[12][0-9]|3[01])日?`)
 	// 【2026-09-11 决议】接线：types.EntityPlate = "plate"（中英统一，pkg/types §6.1 注脚）。
 	// 冲突标注撤销：原"未接线"问题已通过新增 pkg/types.EntityPlate + rePlate/rePlateEN/rePlateCA
 	// 三正则（中文严格 / 英文 / 加州）解决，bench 验证 F1=1.0。
 	//
 	// 【2026-09-11 拍板】接线：types.EntityPlate = "plate"（中英统一，pkg/types §6.1 注脚）。
-	rePlate    = regexp.MustCompile(`[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-HJ-NP-Z0-9]{4,6}`)
+	rePlate = regexp.MustCompile(`[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼][A-Z][A-HJ-NP-Z0-9]{4,6}`)
 	// 英文车牌（美国各州格式不一，无校验位）——弱格式实体。
 	// 处理方式与中文人名一致（reNameCtx 模式）：强上下文 + 只报子匹配：
 	//   1. 必须有 "license/vehicle registration plate (number):" 引导词；
@@ -62,29 +67,43 @@ var (
 	//      例如 "License plate: ABC-1234" / "CA-1234" / "7XWA123"（加州 digit-first 另配）。
 	//   3. 纯字母缩写（API/HTTP/ISO）不命中——需要至少 3 位数字。
 	// 加州 digit-first 格式（7XWA123）：单独一条子规则。
-	rePlateEN  = regexp.MustCompile(`(?i:\b(?:license|vehicle|registration)\s+plate(?:\s+number)?\s*[:#]?\s*)([A-Z]{2,3}[-]?[0-9]{3,4}[A-Z]?)\b`)
-	rePlateCA  = regexp.MustCompile(`(?i:\b(?:license|vehicle|registration)\s+plate(?:\s+number)?\s*[:#]?\s*)([0-9][A-Z]{3}[0-9]{3})\b`)
+	rePlateEN = regexp.MustCompile(`(?i:\b(?:license|vehicle|registration)\s+plate(?:\s+number)?\s*[:#]?\s*)([A-Z]{2,3}[-]?[0-9]{3,4}[A-Z]?)\b`)
+	rePlateCA = regexp.MustCompile(`(?i:\b(?:license|vehicle|registration)\s+plate(?:\s+number)?\s*[:#]?\s*)([0-9][A-Z]{3}[0-9]{3})\b`)
 	// URL：http/https/ftp://...，最后一个字符不允许是句尾标点（. , ; : ! ? ) ] }），
 	// 避免 "Visit https://x.com." 把句号算进 URL。
 	// 实现：主体 [^...]+ + 结尾 [A-Za-z0-9/~#=&_+]（RE2 leftmost-first 正确处理回让）。
-	reURL      = regexp.MustCompile(`\bhttps?://[^\s<>"'{}\\^\x60]+[A-Za-z0-9/~#=&_\-+]|\bftp://[^\s<>"'{}\\^\x60]+[A-Za-z0-9/~#=&_\-+]`)
+	reURL = regexp.MustCompile(`\bhttps?://[^\s<>"'{}\\^\x60]+[A-Za-z0-9/~#=&_\-+]|\bftp://[^\s<>"'{}\\^\x60]+[A-Za-z0-9/~#=&_\-+]`)
 	// 美国 SSN：3-2-4 形态（带分隔符），见 global.ValidUSSSN 的过滤逻辑。
-	reUSSSN    = regexp.MustCompile(`\b\d{3}-\d{2}-\d{4}\b`)
-	reAPIKey   = regexp.MustCompile(`\b(?:sk|pk|api|ak)-[A-Za-z0-9_\-]{16,}`)
-	reJWT      = regexp.MustCompile(`\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}`)
-	reSecretKV = regexp.MustCompile(`(?i)\b(?:api[_\-]?key|secret|password|passwd|pwd|token|access[_\-]?key)\b\s*[:=]\s*["']?([A-Za-z0-9_\-\.]{8,})["']?`)
+	reUSSSN = regexp.MustCompile(`\b\d{3}-\d{2}-\d{4}\b`)
+	// 【2026-09-21 形态容忍】国家码手机号：`+86-186-1234-5678` / `+86 186 1234 5678`
+	// / `+8618612345678`。国家码本身进 span —— 它同样是可识别到人的信息的一部分，
+	// 且真对抗日志的 GT 就是这么标的（整串 `+86-186-1234-5678`）。
+	//
+	// 为什么这条规则自带分隔符容忍、而不交给归一化：归一化只在**文本确实需要归一化时**
+	// 才触发，`+8618612345678` 这种本来就干净的写法不会触发，若不在此容错就会漏掉。
+	// 只有 `-` 与空格两种分隔符 —— `\s` 会把换行也算进去，可能跨行拼接，不值得。
+	rePhoneCC = regexp.MustCompile(`(?:\+|00)?86[ \-]?1[3-9](?:[ \-]?\d){9}`)
+	// 点分手机号（3-4-4 分组），例如 `138.0013.8000`。
+	//
+	// 为什么能在不伤 IPv4 的前提下加这条：3-4-4 的分组里存在**四位组**，而合法 IPv4
+	// 的每一组都不超过 255（至多三位），所以本规则与 reIPv4 天然互斥。
+	// 这也是归一化里宁可保留 `.` 的代价所在（见 normalize.go 文件头第 2 条）。
+	rePhoneDotted = regexp.MustCompile(`1[3-9][0-9]\.[0-9]{4}\.[0-9]{4}`)
+	reAPIKey      = regexp.MustCompile(`\b(?:sk|pk|api|ak)-[A-Za-z0-9_\-]{16,}`)
+	reJWT         = regexp.MustCompile(`\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}`)
+	reSecretKV    = regexp.MustCompile(`(?i)\b(?:api[_\-]?key|secret|password|passwd|pwd|token|access[_\-]?key)\b\s*[:=]\s*["']?([A-Za-z0-9_\-\.]{8,})["']?`)
 	// 高精度人名：必须有强上下文引导词。弱格式实体在正则引擎下只保证精确率。
 	reNameCtx  = regexp.MustCompile(`(?:我叫|姓名|名字是|客户|联系人|收件人|负责人|申请人|用户|病人|患者|就诊人|员工|同学|本人|我是)\s*[:：是为]?\s*([一-龥]{2,4})`)
 	reNameTile = regexp.MustCompile(`([一-龥]{2,4})(?:先生|女士|小姐|老师|医生|同学|工程师|经理|总监)`)
 	// 中文地址：要求出现行政区划关键词以降低误报。
-// 顶部行政区划可以是 X省/自治区，也可以是直辖市（北京/上海/天津/重庆）——
-// 直辖市没有省级前缀，必须单独列出，否则漏检（baseline 0.94 → 改进后 ~0.99）。
-reAddress = regexp.MustCompile(
-	`(?:[一-龥]{2,8}(?:省|自治区)|(?:北京市|上海市|天津市|重庆市))` +
-		`[一-龥]{2,12}(?:市|区|县|旗|盟)` +
-		`[一-龥]{2,20}(?:路|街|道|大街|大道|胡同|里|弄|巷|村|镇|园区|工业园)` +
-		`[0-9]*[号院栋楼室单元层]*`,
-)
+	// 顶部行政区划可以是 X省/自治区，也可以是直辖市（北京/上海/天津/重庆）——
+	// 直辖市没有省级前缀，必须单独列出，否则漏检（baseline 0.94 → 改进后 ~0.99）。
+	reAddress = regexp.MustCompile(
+		`(?:[一-龥]{2,8}(?:省|自治区)|(?:北京市|上海市|天津市|重庆市))` +
+			`[一-龥]{2,12}(?:市|区|县|旗|盟)` +
+			`[一-龥]{2,20}(?:路|街|道|大街|大道|胡同|里|弄|巷|村|镇|园区|工业园)` +
+			`[0-9]*[号院栋楼室单元层]*`,
+	)
 )
 
 // 常见中文姓氏，用于剔除人名启发式的明显误报（如"我们"、"公司"）。
@@ -165,6 +184,27 @@ func NewRegexEngine(opts ...Option) *RegexEngine {
 		// US SSN：必须通过 SSA 校验（area 排除 + group/serial 非零）。
 		{types.EntityUSSSN, 0.9, reUSSSN, boolToV(global.ValidUSSSN), true, false},
 	}
+
+	// 形态专用规则：只跑「归一化窗口」，不进原文那一遍。
+	//
+	// 为什么不让它们扫全文：这两条的 pattern 带可选分隔符（`(?:[ \-]?\d){9}` 这类
+	// 重复里嵌可选项），正则引擎需要大量回溯 —— 实测在 340 字节负载上单条就要
+	// 14.5µs，占整次 Detect 的 ~5%，而绝大多数文本根本没有国家码/点分号码。
+	// 放到窗口上跑，开销就只跟真的像号码的片段长度成正比（同样文本上降到 ~1/17）。
+	// 代价是「本来就没有任何窗口」的文本不再被这两条规则覆盖 —— 但那正是它们
+	// 只可能命中的形态，不存在漏检。
+	e.shapeRules = []rule{
+		{types.EntityPhone, 0.9, rePhoneDotted, validDottedPhoneV, true, false},
+		{types.EntityPhone, 0.9, rePhoneCC, validCountryPhoneV, true, false},
+	}
+
+	// windowRules = 通用规则里「会被书写形态影响」的那些 + 形态专用规则。
+	for _, r := range e.rules {
+		if shapeSensitiveTypes[r.entityType] {
+			e.windowRules = append(e.windowRules, r)
+		}
+	}
+	e.windowRules = append(e.windowRules, e.shapeRules...)
 	return e
 }
 
@@ -176,6 +216,49 @@ func boolToV(old func(string) bool) func(string) (string, bool) {
 	return func(v string) (string, bool) {
 		return "", old(v)
 	}
+}
+
+// stripPhoneSep 去掉手机号书写形态里的分隔符与全角变体
+// （`+86-186-1234-5678` → `+8618612345678`）。
+func stripPhoneSep(v string) string {
+	return strings.Map(func(r rune) rune {
+		switch foldWidth(r) {
+		case '+', '-', '_', '.', ' ':
+			return -1
+		}
+		return r
+	}, v)
+}
+
+// validCountryPhoneV 国家码手机号：剥掉 `+` / `00` / `86` 后按 11 位手机号校验。
+//
+// 必须有这一步：校验器拿到的是**带国家码的原文形态**，直接丢给 cn.ValidPhone
+// 一定是 false（长度就不是 11）。
+func validCountryPhoneV(v string) (string, bool) {
+	s := strings.TrimPrefix(stripPhoneSep(v), "0086")
+	s = strings.TrimPrefix(s, "86")
+	return "", cn.ValidPhone(s)
+}
+
+// validDottedPhoneV 点分手机号：去掉 `.` 后按 11 位手机号校验。
+func validDottedPhoneV(v string) (string, bool) {
+	return "", cn.ValidPhone(stripPhoneSep(v))
+}
+
+// shapeSensitiveTypes 是会被「书写形态」影响的实体类型 —— 数字型固定格式实体。
+//
+// 只有它们值得在归一化文本上再扫一遍：矩阵语料里 dashed / spaced / grouped /
+// fullwidth / country 五种形态共 173 个 GT 全部落在这几类上，一个不落。
+//
+// 人名 / 地址 / 邮箱 / 车牌**不在其列**：它们的写法里没有「数字夹分隔符」这种形态
+// 问题，归一化对它们零增益，却可能在归一化文本上多出误报。
+// `date` 与 `us_ssn` 也刻意不在其列 —— 它们的规则**依赖**分隔符，在归一化文本上
+// 必然失效（见 normalize.go 文件头第 1 条）。
+var shapeSensitiveTypes = map[string]bool{
+	types.EntityPhone:      true,
+	types.EntityIDCard:     true,
+	types.EntityBankCard:   true,
+	types.EntityCreditCard: true,
 }
 
 // Name 引擎名称（契约 §2.2）。
@@ -210,8 +293,62 @@ func (e *RegexEngine) Health(ctx context.Context) error { return nil }
 
 // scan 跑所有规则并附加凭证 KV / 人名启发式结果。
 func (e *RegexEngine) scan(text string) []types.Entity {
+	out := e.scanRules(text, e.rules)
+	out = append(out, e.scanSecretKV(text)...)
+	out = append(out, e.scanPersonName(text)...)
+	out = append(out, e.scanPlateEN(text)...)
+
+	// 形态容忍：把「含分隔符/全角的数字片段」归一化后再扫一遍「数字型固定格式」规则，
+	// 结果映射回原文偏移。
+	//
+	// 这一步**只做加法**：归一化结果里凡是与已有区间相交的一律整条丢弃（overlapsAny），
+	// 所以原文能检出的东西永远不会被归一化结果替换掉 —— 形态容忍不可能造成检测退化。
+	// 它也**不替换原文**：原文那一遍原样保留，`date`/`us_ssn` 这类依赖分隔符的规则
+	// 因此完全不受影响（normalize.go 文件头第 1 条）。
+	//
+	// 只在**窗口**上做归一化，不整篇做：理由见 normalize.go windows 的注释（性能）。
+	for _, w := range windows(text) {
+		norm, starts, ends := normalize(w.text)
+		var nm *normMap
+		if starts != nil {
+			nm = &normMap{starts: starts, ends: ends}
+		}
+		// nm 为 nil 表示窗口「看起来是号码形态但无需归一化」（例如点分号码、或
+		// `+86` 开头本来就干净的写法）—— 此时按恒等映射扫窗口原文即可。
+		for _, ent := range e.scanRules(norm, e.windowRules) {
+			ns, ne, ok := nm.toOrig(ent.Start, ent.End)
+			if !ok {
+				continue
+			}
+			os, oe := w.start+ns, w.start+ne
+			if os >= oe || oe > len(text) || overlapsAny(out, os, oe) {
+				continue
+			}
+			if !uniformSeparators(text, os, oe) {
+				// 分隔符混用 ⇒ 很可能是把不相干的相邻 token 拼成了长数字串（例如
+				// 「日期 + 两个四位数」），不是同一个人的分组写法。丢弃。
+				continue
+			}
+			orig := text[os:oe]
+			// 区间一致性自检：把映射回来的原文切片重新归一化，必须与归一化空间的
+			// 匹配值逐字节相同。不符说明区间映射错位 —— 丢弃。宁可漏检，也绝不允许
+			// 偏移错位导致脱敏改错地方。
+			if back, _, _ := normalize(orig); back != ent.Value {
+				continue
+			}
+			ent.Start, ent.End, ent.Value = os, oe, orig
+			out = append(out, ent)
+		}
+	}
+	return out
+}
+
+// scanRules 按给定规则集扫描文本。
+//
+// 原文与归一化文本共用它，保证两条路径的阈值、边界与校验判定不会各写一份。
+func (e *RegexEngine) scanRules(text string, rules []rule) []types.Entity {
 	var out []types.Entity
-	for _, r := range e.rules {
+	for _, r := range rules {
 		for _, m := range r.re.FindAllStringIndex(text, -1) {
 			start, end := m[0], m[1]
 			if r.digitBoundary && (hasDigitNeighbor(text, start, end)) {
@@ -236,10 +373,21 @@ func (e *RegexEngine) scan(text string) []types.Entity {
 			})
 		}
 	}
-	out = append(out, e.scanSecretKV(text)...)
-	out = append(out, e.scanPersonName(text)...)
-	out = append(out, e.scanPlateEN(text)...)
 	return out
+}
+
+// overlapsAny 判断 [start, end) 是否与已有实体区间相交。
+//
+// 取「任何类型」而不是「同类型」：相交的两段区间在下游（filterAndSort 按分数、
+// sanitizeEntities 按长度）只会留下一个，留下的那个更短就会残留未脱敏的明文。
+// 归一化结果宁可整条丢弃，也不参与这种二选一。
+func overlapsAny(ents []types.Entity, start, end int) bool {
+	for _, e := range ents {
+		if e.Start < end && start < e.End {
+			return true
+		}
+	}
+	return false
 }
 
 // span 是「同一段文本内已上报区间」的去重键。

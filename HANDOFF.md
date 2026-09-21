@@ -14,7 +14,7 @@
 | **语料副本** | `bench/` 子模块本机为空目录；语料工作副本 = 独立克隆 `/home/jzhli/cn-pii-bench`，`dev` @ `b6779a7`（见 §3.2 第 6 坑） |
 | **仓可见性** | ✅ public（anonymous 可 clone） |
 | **Release** | ✅ `v0.1.0` 已发布：7 assets（6 平台 + SHA256SUMS） |
-| **CI** | ⏳ **待验证 @ `7bf5290`**（11 job：verify / build / e2e / coverage / bench / bench-gate / bench-baseline / lint / vscode-ext / perf / vuln）。上一轮 `c066ebb` 为 11/11 全绿 |
+| **CI** | ✅ **11 job 全绿 @ `4f3ef42`**（verify / build / e2e / coverage / bench / bench-gate / bench-baseline / lint / vscode-ext / **perf** / vuln）。其中 `bench perf guard` 在 `3ed9720` 曾红（假阳性，已修，见 §14 与 `Specs/06` B-23） |
 | **Go 版本** | CI `1.25.13`；`gateway/go.mod` 声明 `go 1.24` |
 | **合成语料 F1** | 1.0000（中文 240 + 英文 180）—— **过拟合基线，不是对外宣称值** |
 | **真对抗 F1** | span **0.7027**（主口径）/ strict **0.6486**（下界）/ 悲观 0.6933（28 条 / 48 GT） |
@@ -31,6 +31,12 @@
 > ⚠️ **数字可比性分两层看**：09-16 那次的下降（`0.7458 → 0.6479`）来自**度量变准**
 > （语料修订，GT 37 → 48），不可比；09-21 这次的上升（`0.6479 → 0.7027`）来自**检测器变强**
 > （形态容忍），语料逐字节未变，**可比**。详见 `cn-pii-bench/README.md`。
+>
+> ⚠️ **`gateway/bench_baseline.txt` 本轮未变**（仍是 2026-09-11 CI 首跑生成的那份）。
+> replacer 基准解耦后 `ns/op` 降到基线的约 **0.77×**，即当前留了约 1.6× 的余量
+> （门禁只在超过 1.25× 时报红）—— 也就是说 replacer 再慢约 60% 才会触发门禁。
+> 若想收紧，需要重跑一次首跑逻辑（删掉基线文件，让 perf job 自行生成并回写）。
+> **本轮故意不做**：那会产生一个非 `jzh-li` 的 bot 提交，且结果无法在本机验证。
 
 ---
 

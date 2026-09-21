@@ -10,7 +10,7 @@
 
 | 项 | 状态 |
 |---|---|
-| **HEAD** | `7bf5290`（形态容忍实现 + CI 阈值），工作树干净，**与 origin/main 同步** |
+| **HEAD** | `f25e769`（形态容忍实现 + CI 阈值 + perf 基准修复），工作树干净，**与 origin/main 同步** |
 | **语料副本** | `bench/` 子模块本机为空目录；语料工作副本 = 独立克隆 `/home/jzhli/cn-pii-bench`，`dev` @ `b6779a7`（见 §3.2 第 6 坑） |
 | **仓可见性** | ✅ public（anonymous 可 clone） |
 | **Release** | ✅ `v0.1.0` 已发布：7 assets（6 平台 + SHA256SUMS） |
@@ -544,6 +544,7 @@ CI 随即 **11/11 全绿**。
 | 提交 | 内容 |
 |---|---|
 | `7bf5290` | **形态容忍**：新增 `gateway/internal/detector/normalize.go`（归一化窗口 + 字节偏移映射）与 `regex.go` 的第二遍扫描；`--min-recall` 0.46 → **0.53**；`bench` gitlink `b377e16 → b6779a7`（详见下节） |
+| `f25e769` | **perf 门禁假阳性修复**：replacer 基准改用写死的实体列表（详见本节「第二个坑」与 `Specs/06` B-23） |
 
 语料侧：`cn-pii-bench` 推 `b6779a7`（`dev`）—— 本轮报告入仓 +
 README 基线同步，**评估器脚本零改动**。
@@ -590,6 +591,28 @@ README 基线同步，**评估器脚本零改动**。
 > 归因时的一个教训：把窗口判定强制关掉的对照实验回到 ~288000 ns/op，
 > 说明剩下那点差异主要是 benchmark 的代码布局噪声，不是真实开销。
 > **别把噪声当回归去优化。**
+
+### 第二个坑：perf 门禁的假阳性（已修，详见 `Specs/06` B-23）
+
+推送后 CI 的 `bench perf guard` 红了，报 `BenchmarkReplacerSessionReplace` 与
+`BenchmarkReplacerFullReplace` 回退超 1.25×，**其余 10 个 job 全绿**（含真对抗守门
+与 detector 自己的基准）。
+
+根因不在 detector 的性能，而在那条基准的**工作量定义**：
+`replacer_bench_test.go` 的 `benchEntities()` 当时用真实检测器现场检出实体，
+于是形态容忍让实体数 **4 → 5**（多检出分组卡号 `4111 1111 1111 1111`），
+工作量涨约 25%，正好压过容差线。**检测变强被读成了 replacer 变慢。**
+
+判据是 `allocs/op` 与 `B/op` —— 它们确定性、不受调度噪声影响：
+改动前 34 allocs / 2849 B，改动后 39 allocs / 4097 B，同步上升即说明工作量变了。
+
+修法：把实体列表**写死**（加一条 `[Start,End)` 与 `Value` 逐字一致的自检），
+并去掉该基准对 detector 的 import。验证：`B/op` / `allocs/op` 逐位回到改动前；
+同机交错 A/B 的 `FIXED_min/BASE_min` = 0.778 / 0.755（**比改动前还快约 24%**，
+因为测试二进制不再被塞进那批常驻编译正则）。
+
+> 排查这类红灯的固定动作：**先比 `allocs/op`，再比 `ns/op`。**
+> 时间差值可能是噪声，分配数变化一定是工作量的真实变化。
 
 ### 顺带明确的一件事（未做，留给决策）
 

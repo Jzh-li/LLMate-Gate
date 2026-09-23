@@ -284,20 +284,27 @@ docker run -d -p 8400:8400 ghcr.io/llmate/llmate-gate:latest
 
 ## 🔧 配置
 
-LLMate Gate 通过环境变量或 config.yaml 配置：
+配置**只经由 config.yaml**（用 `--config` 指定）。网关进程**不读** `LISTEN_PORT` /
+`TARGET_LLM` / `FAIL_CLOSED` 这类环境变量 —— 设了不会有任何效果，也不会有任何警告。
 
-| 配置项 | 默认值 | 说明 |
+要在配置里注入环境变量（推荐用于密钥），用 YAML 内的 `${VAR}` / `${VAR:-default}`
+占位符（实现见 `gateway/internal/config`）：
+
+```yaml
+gateway:
+  upstream_api_key: "${OPENAI_API_KEY}"
+  auth_token: "${GATEWAY_AUTH_TOKEN}"
+```
+
+除此之外，网关与周边组件**只读下面这几个具体变量**：
+
+| 变量 | 读取方 | 作用 |
 | --- | --- | --- |
-| LISTEN_PORT | 8400 | 网关监听端口 |
-| TARGET_LLM | https://api.openai.com | 上游 LLM API 地址 |
-| GATEWAY_AUTH_TOKEN | - | 网关客户端认证令牌 |
-| VAULT_PATH | ./vault_data | 加密映射表存储路径 |
-| DETECTION_CACHE | true | 开启 conversation_id 增量缓存 |
-| CACHE_TTL | 30m | 映射表生存时间 |
-| FAIL_CLOSED | true | 检测异常即阻断 |
-| STREAMING_RESTORE | true | SSE 流式响应还原 |
-| LOG_LEVEL | info | 日志级别 |
-| AUDIT_LOG | true | 审计日志开关 |
+| `LLMATE_GATEWAY_URL` | MCP 客户端 | 网关地址（默认 `http://127.0.0.1:8400`） |
+| `LLMATE_GATEWAY_TOKEN` | MCP 客户端 | 鉴权令牌；为空时回退 `GATEWAY_AUTH_TOKEN` |
+| `GATEWAY_AUTH_TOKEN` | MCP 客户端 | 上一条的回退项 |
+| `GATEWAY_SESSION_KEY` | 网关进程 | 固定「会话级仿真密钥」（默认每次启动随机生成、重启失效） |
+| `LMGATE_HOOK_FAIL_CLOSED` | Claude Code hooks（Python） | 网关不可达时 deny（默认 `0` = fail-open）。**它管的是 hook 自己，不是网关的 fail-closed** |
 
 ### config.yaml 示例
 
@@ -663,7 +670,7 @@ LLMate Gate 的审计日志是结构化的，每条记录包含：
 | 真对抗 F1（strict，下界） | **0.6486** | 值逐字相等 —— 衡量「跨度和语料是否一致」 |
 | 精确率 (P) | 1.0000 | span 口径 **0 误报** |
 | 召回率 (R) | 0.5417 | 真 PII 里约 54% 被找到 |
-| 检测 p50/p95/p99 延迟 | 0/0/7 ms | `/_api/privacy/redact gate_only=true` |
+| 检测 p50/p95/p99 延迟 | 0/0/7 ms | `/v1/privacy/redact gate_only=true` |
 
 > ⚠️ **必须同时给出 span 与 strict 两个数。** 两口径 F1 差 0.0541，差距来自「找到了但与语料跨度
 > 不完全一致」（典型是地址少标一个门牌）—— 只报其中一个都是误导。

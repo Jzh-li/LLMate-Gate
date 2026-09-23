@@ -1,6 +1,6 @@
 # LLMate Gate 实现规格（AS-BUILT）
 
-> **文档版本**：v1.10（2026-09-23）
+> **文档版本**：v1.11（2026-09-23）
 > **层级**：L2-AsBuilt（实现现状规格）
 > **取证基线**：`origin/main @ ca63991`（v1.0 取证于 `c64f246`，其后历版为 `0a21dfa` → `ca63991`；
 > v1.1 增补第 6 批缺陷修复；
@@ -17,7 +17,9 @@
 > `fallback_regex` 的错误陈述**（原文描述了并不存在的行为）；
 > v1.10 §12.1 记「文档/help 命令级承诺」的修正（`Specs/06` #32，本轮只做文档侧）；
 > §12.2 增三条待定 —— 启动期错误不带 cause、usage 承诺的 `-V` 未注册、
-> 示例配置测试只硬编码单文件）
+> 示例配置测试只硬编码单文件）；
+> v1.11 §12.1 记 README 的配置通道假承诺（`Specs/06` #33）：10 个环境变量中 9 个零实现，
+> 换成真实清单，并修正性能基准表的口径端点）
 > **取证方法**：全量 `git log`（92 commit）+ 逐包读源码 + 本机实际编译运行验证。
 > **核心规则**：**本文档以代码为唯一事实来源。** 任何与 `HANDOFF.md` / `Specs/00` 冲突之处，以本文档为准；本文档与代码冲突时，以代码为准并回来更新本文档。
 > **不回答的问题**：为什么这样设计（见 `Specs/00`）、原始排期（见 `Specs/01`）。
@@ -875,6 +877,7 @@ python3 bench_runner_adversarial.py --endpoint http://127.0.0.1:8413/v1/privacy/
 | **#26** | `policy.tool_call_scan` / `stream_restore` 是空转的假开关 | 🟡 中 | ✅ 已修（收窄成只能为真，写 false 启动期报错；见 `Specs/06` #26） |
 | **#31** | **8 个「零读者 / 仅校验」配置键** —— `gateway.request_timeout`、`gateway.log_level`、`detection.fallback_regex`、`sidecar.{start_timeout,restart_limit,auto_start}`、`vault.key_derivation` 零读取方；`vault.encryption` 仅被校验、不被使用 | 🟡 中 | ✅ 已修（2026-09-23）：字段与示例配置逐条标注「尚未生效」；两个不可配的 vault 键**收窄成唯一合法值**（写别的启动期报错）+ 单测。**未改行为、未删除任何键**——实现与否留给后续决定，见 `Specs/06` #31 |
 | **#32** | **文档/help 给出的命令与实现不符** —— README「从源码构建」两条命令都跑不通（`--upstream` 这个 flag 不存在、`configs/config.yaml` 这个文件不存在），同名标题还出现两节 | 🟡 中 | ⏸ 文档侧已修（2026-09-23，`66bf806`）：补 `cp config.example.yaml config.yaml` 一步、删掉错位的重复节、加「上游只能写在配置文件里」说明。**代码侧 3 条见 §12.2** |
+| **#33** | **README 承诺 10 个环境变量，9 个在代码里零出现** —— 含安全开关 `FAIL_CLOSED` 与隐私开关 `STREAMING_RESTORE`，且与 hooks 里**真实**的 `LMGATE_HOOK_FAIL_CLOSED` 名字撞车；另性能基准表的测量口径端点写成了不存在的 `/_api/privacy/redact` | 🟡 中 | ✅ 已修（2026-09-23，四轮）：假表换成**真实 env 清单**（5 个变量 + `${VAR}` 占位符机制）+ 修正口径端点为 `/v1/privacy/redact` |
 
 ### 12.2 未修 / 明确不做
 

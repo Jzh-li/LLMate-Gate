@@ -340,7 +340,7 @@ audit:
 | `reCreditCard` | 13-19 位数字 | **先 Luhn，再按 IIN 前缀分发** `zh_bank_card` / `credit_card`（`cardDispatch`） |
 | `reEmail` | 邮箱 | |
 | `reIPv4` | IPv4 | 逐段 0-255 校验 |
-| `reDate` | 日期 | 支持 `-/.年` 分隔 |
+| `reDate` | 日期 | 支持 `-/.年` 分隔；**日分支必须长优先**（`(?:3[01]|[12][0-9]|0?[1-9])`）—— 后面跟的是可选的 `日?`，短优先会因 leftmost-first 提前接受而截断跨度（`2024-09-17` → `2024-09-1`，见 `Specs/06` B-24） |
 | `rePlate` / `rePlateEN` / `rePlateCA` | 车牌 | 中文严格；英文/加州模式**必须带引导词**（弱格式实体策略） |
 | `reURL` | URL | 结尾不允许句尾标点 |
 | `reUSSSN` | 美国 SSN | 形态 + `global.ValidUSSSN` 二次过滤 |

@@ -619,7 +619,11 @@ go run ./cmd/judge-bench -kind openai \
 | US SSN | AAA-GG-SSSS + SSA 区域规则 | 078-05-1120 |
 | 国际信用卡 | 13-19 位 + Luhn + IIN 前缀 | 4242424242424242 (Visa) |
 
-校验函数在 `gateway/pkg/global/`（`ValidURL` / `ValidUSSSN` / `ValidCreditCard` / `IsInternationalCard`），与中文 `pkg/cn/` 解耦、不互相依赖。
+校验函数在 `gateway/pkg/global/`（`ValidURL` / `ValidUSSSN` / `ValidCreditCard` / `IsInternationalCard`），中文校验在 `gateway/pkg/cn/`。
+
+> 两包的关系：**单向依赖 `pkg/global → pkg/cn`**（`global.go:102` 复用 `cn.LuhnValid` —— 中国 Luhn 与国际 Luhn 算法一致），无环。
+> 不是「互相依赖」，但**也不是解耦**：改 `pkg/cn` 的 Luhn 实现会同时影响 `pkg/global` 的信用卡校验。
+> 原文曾写作「解耦、不互相依赖」，2026-09-23 更正（`Specs/06` #37）。
 
 PII Engineer 侧模型支持 13+ 语言：English, Malay, Tamil, Chinese, Indonesian, Vietnamese, Thai, Hindi, Bengali, Korean, Japanese, German, French, Spanish, Portuguese, Russian, Arabic, Turkish, Polish, Dutch, Italian, Swedish 等 35+ 语言。
 

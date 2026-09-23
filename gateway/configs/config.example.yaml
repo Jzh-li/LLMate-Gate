@@ -119,8 +119,65 @@ replacement:
 
 policy:
   fail_closed: true                      # 检测异常即阻断，绝不裸奔
-  tool_call_scan: true                   # 递归扫描 tool_calls 参数
-  stream_restore: true                   # SSE trie 缓冲还原
+  # 下面两个键是**历史遗留**，只能为 true（或整行省略）：
+  # 它们声称控制的行为——递归扫描 tool_calls 参数 / SSE 缓冲还原——是无条件
+  # 执行的，代码从未读过这两个字段。保留键名是为了不打断已发布的配置，
+  # 但写 false 会在启动期报错：空转的开关比没有开关更危险。
+  tool_call_scan: true                   # 只能为 true
+  stream_restore: true                   # 只能为 true
+
+# ── 行为判断层（Judge）────────────────────────────────────────────────────────
+# 判断「这段工具调用要不要拦」，而不是「这段文本里有没有 PII」。PII 检测看内容，
+# 判断层看动作：打包整个代码仓库、读 .ssh、往非白名单 host 外发……
+#
+# 前提共识，先读这三条再配：
+#
+#  1. 模型不出决策，只出证据。后端（规则或本地模型）只给 {category, severity,
+#     confidence}；allow / redact / review / block 由本文件的阈值表确定性算出。
+#     因此「同输入必同 action」可审计、可进 CI，模型质量只影响 severity 取值。
+#  2. 判断层不联网。base_url 只允许本机/内网（回环、10/8、172.16/12、192.168/16…），
+#     配公网地址会启动失败。一个用来防数据外泄的组件自己把数据发出去是自相矛盾的。
+#  3. 判断器是 BYOM 骨架，不预置模型。你自己选模型，通过 kind: openai 接任意
+#     OpenAI 兼容服务（Ollama / llama.cpp server / vLLM / LM Studio / LocalAI…）。
+#
+# 默认关闭。开启需给 backends（否则启动期报错）；points 默认全关、逐点打开。
+judgment:
+  enabled: false
+  # shadow : 只记指标/日志，绝不改变现有行为（首版强烈建议）
+  # enforce: 按 verdict 的动作生效。开之前请先用 judge-bench 拿到漏报/误报口径——
+  #          没有这个口径，「拦住的是不是该拦」是不可知的。
+  mode: "shadow"
+  fail_closed: true                      # 判断层整体不可用时 → review（交人），不是放行
+  timeout: "300ms"                       # 单次判定预算；超时 ⇒ 降级下个后端，不是放行
+  # 后端列表，顺序 = 降级顺序：语义能力强的在前，确定性规则在最后兜底。
+  # 规则后端永不缺席是这套设计的硬保证——它进程内、零依赖、可进 CI 回归。
+  backends:
+    - name: "rules"                      # 进程内确定性规则
+      kind: "rules"
+    # - name: "local"
+    #   kind: "openai"                     # 任意 OpenAI 兼容服务
+    #   base_url: "http://127.0.0.1:11434/v1"   # Ollama 默认；只允许本机/内网
+    #   model: "qwen2.5:7b-instruct"
+    #   # 约束解码模式。越强越好：json_schema > gbnf > format > prompt_only。
+    #   # 留空按 prompt_only 处理（不假定你的服务受约束），此时解析失败会走 review。
+    #   schema_mode: "json_schema"
+    #   timeout: "250ms"
+  # 阈值表。⚠️ per-backend：confidence 跨模型不可比（同一模型在不同语言上的
+  # 置信度都能与准确率脱节），所以每个后端可用自己的 thresholds 覆盖这一段。
+  thresholds:
+    block: 0.85
+    review: 0.55
+    redact: 0.30
+  # 判断点分开关，默认全关。灰度上线用：先开 tool_params，观察一段时间再加。
+  points:
+    inbound_text: false                  # 请求入站文本整段判定（v1 预留）
+    tool_params: false                   # 工具调用参数判定
+    mcp_scan: false                      # MCP 门面参数扫描
+    endpoint: false                      # 控制面 /v1/judge 端点
+  # 白名单先于一切判断：agent 天天读 .git 是正常开发，命中即放行、不进后端。
+  whitelist:
+    hosts: ["127.0.0.1", "localhost"]
+    tools: []
 
 vault:
   path: "./vault_data"

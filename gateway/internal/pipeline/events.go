@@ -46,21 +46,21 @@ type ReplacementPayload struct {
 // 5 段对应 UI设计 §2：原始请求 / 检测 / 脱敏后请求 / 上游响应 / 还原后响应。
 // pipeline 通过 EventPublisher 广播给 debug.Hub 存储与 WS 推送。
 type TrafficEvent struct {
-	RequestID    string               `json:"request_id"`
-	Endpoint     string               `json:"endpoint"`
-	Method       string               `json:"method,omitempty"`
-	Stream       bool                 `json:"stream,omitempty"`
-	RawRequest   string               `json:"raw_request,omitempty"`
-	Detected     []types.Entity       `json:"detected,omitempty"`
-	Replaced     string               `json:"replaced,omitempty"`
-	UpstreamResp string               `json:"upstream_response,omitempty"`
-	Restored     string               `json:"restored,omitempty"`
-	Mapping      []MappingEntry       `json:"mapping,omitempty"`
-	Strategy     string               `json:"strategy"`
-	Outcome      string               `json:"outcome"`
-	Error        string               `json:"error,omitempty"`
-	DurationMs   int64                `json:"duration_ms,omitempty"`
-	StartedAt    time.Time            `json:"started_at,omitempty"`
-	FinishedAt   time.Time            `json:"finished_at,omitempty"`
-	Timestamp    time.Time            `json:"timestamp"`
+	RequestID    string         `json:"request_id"`
+	Endpoint     string         `json:"endpoint"`
+	Method       string         `json:"method,omitempty"`
+	Stream       bool           `json:"stream,omitempty"`
+	RawRequest   string         `json:"raw_request,omitempty"`
+	Detected     []types.Entity `json:"detected,omitempty"`
+	Replaced     string         `json:"replaced,omitempty"`
+	UpstreamResp string         `json:"upstream_response,omitempty"`
+	Restored     string         `json:"restored,omitempty"`
+	Mapping      []MappingEntry `json:"mapping,omitempty"`
+	Strategy     string         `json:"strategy"`
+	Outcome      string         `json:"outcome"`
+	Error        string         `json:"error,omitempty"`
+	DurationMs   int64          `json:"duration_ms,omitempty"`
+	StartedAt    time.Time      `json:"started_at,omitempty"`
+	FinishedAt   time.Time      `json:"finished_at,omitempty"`
+	Timestamp    time.Time      `json:"timestamp"`
 }

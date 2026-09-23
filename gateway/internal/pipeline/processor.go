@@ -9,10 +9,10 @@ import (
 	"errors"
 	"time"
 
-	gatewayerrors "gateway/internal/errors"
 	"gateway/internal/audit"
 	"gateway/internal/cache"
 	"gateway/internal/detector"
+	gatewayerrors "gateway/internal/errors"
 	"gateway/internal/metrics"
 	"gateway/internal/replacer"
 	"gateway/internal/vault"
@@ -32,14 +32,14 @@ func (NopPublisher) Publish(string, interface{}) {}
 
 // Processor 请求处理编排器。
 type Processor struct {
-	det       detector.Client
-	repl      replacer.Replacer
-	vault     vault.Vault
-	dc        cache.Cache
-	audit     *audit.Logger
-	m         *metrics.Collectors
-	pub       EventPublisher
-	useCache  bool
+	det        detector.Client
+	repl       replacer.Replacer
+	vault      vault.Vault
+	dc         cache.Cache
+	audit      *audit.Logger
+	m          *metrics.Collectors
+	pub        EventPublisher
+	useCache   bool
 	failClosed bool
 }
 
@@ -59,14 +59,14 @@ type Config struct {
 // New 构造编排器。
 func New(cfg Config) *Processor {
 	return &Processor{
-		det:       cfg.Detector,
-		repl:      cfg.Replacer,
-		vault:     cfg.Vault,
-		dc:        cfg.Cache,
-		audit:     cfg.Audit,
-		m:         cfg.Metrics,
-		pub:       cfg.Publisher,
-		useCache:  cfg.UseCache,
+		det:        cfg.Detector,
+		repl:       cfg.Replacer,
+		vault:      cfg.Vault,
+		dc:         cfg.Cache,
+		audit:      cfg.Audit,
+		m:          cfg.Metrics,
+		pub:        cfg.Publisher,
+		useCache:   cfg.UseCache,
 		failClosed: cfg.FailClosed,
 	}
 }

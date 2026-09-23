@@ -34,10 +34,10 @@ import (
 
 func main() {
 	var (
-		listen     = flag.String("listen", ":18000", "mock sidecar listen address")
-		sleep      = flag.Duration("sleep", 0, "artificial processing delay per request (used to trigger timeout)")
+		listen      = flag.String("listen", ":18000", "mock sidecar listen address")
+		sleep       = flag.Duration("sleep", 0, "artificial processing delay per request (used to trigger timeout)")
 		respondFail = flag.Bool("respond-fail", false, "immediately return 500 (used to trigger unavailable)")
-		engineName = flag.String("engine", "mock-pii-engineer", "engine name reported in Health")
+		engineName  = flag.String("engine", "mock-pii-engineer", "engine name reported in Health")
 	)
 	flag.Parse()
 
@@ -101,8 +101,9 @@ func main() {
 // 真实检测逻辑由内置 regex 完成；网关层先 receive 真实实体，存在 cache 即可）。
 //
 // 这里我们只返回 nil entities —— 主要目的是「侧车存活但无附加 PII」以验证：
-//   1. cache 与 sidecar 的 round-trip
-//   2. 不同 sidecar 实现的协议一致性
+//  1. cache 与 sidecar 的 round-trip
+//  2. 不同 sidecar 实现的协议一致性
+//
 // 如果要触发超时，--sleep 已足够；不需要真实内容。
 func regexSimulate(text string) []types.Entity {
 	_ = text

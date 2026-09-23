@@ -131,16 +131,16 @@ func main() {
 	}
 
 	out := map[string]interface{}{
-		"corpus":       path,
-		"cases":        len(cases),
-		"precision":    safeDiv(totalTP, totalTP+totalFP),
-		"recall":       safeDiv(totalTP, totalTP+totalFN),
-		"f1":           safeDiv(2*totalTP, 2*totalTP+totalFP+totalFN),
-		"tp":           totalTP,
-		"fp":           totalFP,
-		"fn":           totalFN,
-		"by_type":      aggregate(gtCount, detCount, tpCount),
-		"by_subset":    subsetAggregate(subsetTP, subsetFN),
+		"corpus":    path,
+		"cases":     len(cases),
+		"precision": safeDiv(totalTP, totalTP+totalFP),
+		"recall":    safeDiv(totalTP, totalTP+totalFN),
+		"f1":        safeDiv(2*totalTP, 2*totalTP+totalFP+totalFN),
+		"tp":        totalTP,
+		"fp":        totalFP,
+		"fn":        totalFN,
+		"by_type":   aggregate(gtCount, detCount, tpCount),
+		"by_subset": subsetAggregate(subsetTP, subsetFN),
 	}
 	b, _ := json.MarshalIndent(out, "", "  ")
 	fmt.Println(string(b))

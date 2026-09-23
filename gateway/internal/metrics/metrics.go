@@ -6,6 +6,7 @@
 //   - 延迟类指标单位统一为秒（Prometheus 惯例单位，优于 ms）；
 //   - spec 原列的 pii_detected_total / tool_calls_scanned_total / request_total_latency /
 //     response_restore_latency 四项已于 2026-09-12 在本文件实现（命名对齐 spec，单位用秒）。
+//
 // 指标名属公共接口，改名会破坏已对接的 Grafana/告警，故保持现状。
 package metrics
 
@@ -13,19 +14,19 @@ import "github.com/prometheus/client_golang/prometheus"
 
 // Collectors 网关运行指标集合（统一在 /metrics 暴露）。
 type Collectors struct {
-	RequestsTotal       *prometheus.CounterVec
-	DetectLatency       *prometheus.HistogramVec
-	ReplaceCount        *prometheus.CounterVec
-	RestoredTotal       *prometheus.CounterVec
-	BlockedTotal        *prometheus.CounterVec
-	UpstreamErrors      *prometheus.CounterVec
-	StreamOrphans       *prometheus.CounterVec
-	CacheHits           *prometheus.CounterVec
-	CacheMisses         *prometheus.CounterVec
+	RequestsTotal  *prometheus.CounterVec
+	DetectLatency  *prometheus.HistogramVec
+	ReplaceCount   *prometheus.CounterVec
+	RestoredTotal  *prometheus.CounterVec
+	BlockedTotal   *prometheus.CounterVec
+	UpstreamErrors *prometheus.CounterVec
+	StreamOrphans  *prometheus.CounterVec
+	CacheHits      *prometheus.CounterVec
+	CacheMisses    *prometheus.CounterVec
 	// DetectIncremental Merkle 增量缓存：本请求实际「送检测器」vs「复用缓存」的段数。
-	DetectIncremental   *prometheus.CounterVec
-	VaultSize           prometheus.Gauge
-	ActiveConns         prometheus.Gauge
+	DetectIncremental *prometheus.CounterVec
+	VaultSize         prometheus.Gauge
+	ActiveConns       prometheus.Gauge
 
 	// —— 以下 4 项 2026-09-12 补齐（spec §14.2 原「规划中」→「已实现」）——
 
@@ -37,6 +38,22 @@ type Collectors struct {
 	RequestLatency *prometheus.HistogramVec
 	// RestoreLatency 响应还原（de-anonymize）处理耗时，单位秒。
 	RestoreLatency *prometheus.HistogramVec
+
+	// —— 以下 3 项为行为判断层（契约 §12，2026-09-23）——
+
+	// VerdictTotal 判断层裁决数（按动作/类别/后端）。
+	//
+	// 这是判断层最重要的一个指标：`action="review"` 与 `action="block"` 的
+	// 比例直接回答「这个后端是不是在乱判」，而 `engine` 标签回答「是哪一层
+	// 在判」——降级频繁说明首选后端不可用或总在说 unknown。
+	VerdictTotal *prometheus.CounterVec
+	// JudgeLatency 单次判定耗时（按后端），单位秒。
+	JudgeLatency *prometheus.HistogramVec
+	// JudgeUnavailable 判定失败数（按后端与原因类别）。
+	//
+	// 与 VerdictTotal 分开：失败不是「判了一个结果」，它意味着这次
+	// **没有看到**动作，属于覆盖缺口，不能和正常裁决混在同一个计数里。
+	JudgeUnavailable *prometheus.CounterVec
 }
 
 // New 构造并注册全部指标。
@@ -109,12 +126,27 @@ func New(reg prometheus.Registerer) *Collectors {
 			Help:    "响应还原（de-anonymize）处理耗时分布",
 			Buckets: []float64{0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1},
 		}, []string{"endpoint"}),
+		VerdictTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "llmate_verdict_total",
+			Help: "判断层裁决数（按动作/类别/后端）",
+		}, []string{"action", "category", "engine"}),
+		JudgeLatency: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name: "llmate_judge_latency_seconds",
+			Help: "单次行为判定耗时分布（按后端）",
+			// 桶按判断层的预算设：热路径 300ms，所以重点刻度在毫秒到百毫秒。
+			Buckets: []float64{0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.3, 0.5, 1},
+		}, []string{"engine"}),
+		JudgeUnavailable: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "llmate_judge_unavailable_total",
+			Help: "判断层判定失败次数（按后端与原因），表示这段时间内的覆盖缺口",
+		}, []string{"engine", "reason"}),
 	}
 	reg.MustRegister(
 		c.RequestsTotal, c.DetectLatency, c.ReplaceCount, c.RestoredTotal,
 		c.BlockedTotal, c.UpstreamErrors, c.StreamOrphans,
 		c.CacheHits, c.CacheMisses, c.DetectIncremental, c.VaultSize, c.ActiveConns,
 		c.PIIDetected, c.ToolCallsScanned, c.RequestLatency, c.RestoreLatency,
+		c.VerdictTotal, c.JudgeLatency, c.JudgeUnavailable,
 	)
 	return c
 }

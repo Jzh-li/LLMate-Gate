@@ -264,8 +264,8 @@ func (x *Exporter) Export(format string, events []Event) ([]byte, error) {
 		records = append(records, x.project(format, e))
 	}
 	return json.MarshalIndent(map[string]interface{}{
-		"format": format,
-		"count":  len(records),
+		"format":  format,
+		"count":   len(records),
 		"records": records,
 	}, "", "  ")
 }

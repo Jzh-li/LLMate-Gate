@@ -24,11 +24,11 @@ type Cache interface {
 }
 
 type entry struct {
-	key        string
-	resp       *types.DetectResponse
-	expiresAt  time.Time
+	key            string
+	resp           *types.DetectResponse
+	expiresAt      time.Time
 	conversationID string
-	listElem   *list.Element
+	listElem       *list.Element
 }
 
 // LRU 进程内 LRU + TTL 缓存（契约 §8.2：v1 用 sync.Map + LRU，max 10000 条）。

@@ -30,7 +30,7 @@ func TestPolicy_Defaults(t *testing.T) {
 
 func TestPolicy_Override(t *testing.T) {
 	p, err := New(map[string]string{
-		"zh_phone":  "mask",
+		"zh_phone":   "mask",
 		"zh_id_card": "redact",
 	})
 	require.NoError(t, err)

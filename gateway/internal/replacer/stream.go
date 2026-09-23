@@ -28,9 +28,9 @@ func StreamOrphans() int64 { return StreamOrphanTotal.Load() }
 //     缓冲「可能是某哨兵串前缀」的尾部字节来保证跨块拼接，哨兵串被完整到达即还原，
 //     否则保留缓冲等待后续分块。查不到（不匹配且无前缀关系）→ 原样透传（fail-safe）。
 type StreamRestorer struct {
-	table map[string]string // 哨兵串 → 原值
-	buf   []byte             // 跨块缓冲，仅保留「可能成为哨兵前缀」的尾部
-	orphans int64            // 本还原器（即本请求）累计的残留哨兵数
+	table   map[string]string // 哨兵串 → 原值
+	buf     []byte            // 跨块缓冲，仅保留「可能成为哨兵前缀」的尾部
+	orphans int64             // 本还原器（即本请求）累计的残留哨兵数
 }
 
 // Orphans 返回**本还原器**（通常是单个请求）累计的残留哨兵数。

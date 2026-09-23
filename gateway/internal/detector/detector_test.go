@@ -229,7 +229,8 @@ func TestRegexEngine_PlateEN_AllOccurrencesReported(t *testing.T) {
 }
 
 // TestRegexEngine_IDCardChecksum 身份证必须通过 ISO 7064 校验位。
-func TestRegexEngine_IDCardChecksum(t *testing.T) {	e := NewRegexEngine()
+func TestRegexEngine_IDCardChecksum(t *testing.T) {
+	e := NewRegexEngine()
 	resp, err := e.Detect(context.Background(), &types.DetectRequest{
 		Text: "身份证11010519491231002X，另一个110105194912310021"})
 	require.NoError(t, err)
@@ -468,7 +469,8 @@ func TestRegexEngine_AddressAllForms(t *testing.T) {
 		{"autonomous_region", "地址：内蒙古自治区呼和浩特市新华大街50号", "内蒙古自治区呼和浩特市新华大街50号"},
 	}
 	e := NewRegexEngine()
-	for _, tc := range cases {		t.Run(tc.name, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			resp, err := e.Detect(context.Background(), &types.DetectRequest{Text: tc.text})
 			require.NoError(t, err)
 			var saw bool

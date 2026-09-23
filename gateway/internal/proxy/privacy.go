@@ -2,8 +2,9 @@
 //
 // privacy.go 提供常驻（不受 --no-debug 门控）的隐私 API，供 Claude Code hooks、
 // VS Code 扩展等外部集成点调用：
-//   POST /v1/privacy/redact   —— 对一段 JSON / 文本递归脱敏（键保留、值脱敏），返回占位符 + request_id
-//   POST /v1/privacy/restore  —— 按 request_id 把占位符还原为原文
+//
+//	POST /v1/privacy/redact   —— 对一段 JSON / 文本递归脱敏（键保留、值脱敏），返回占位符 + request_id
+//	POST /v1/privacy/restore  —— 按 request_id 把占位符还原为原文
 //
 // 与调试面板 /_api/replace 的区别：这里常驻可用、auth 门控、且支持任意嵌套 JSON 的递归扫描，
 // 并复用与代理层完全一致的核心（pipeline.DetectText / replacer.Session / vault），保证占位符一致。
@@ -66,9 +67,9 @@ type privacyRedactResp struct {
 	Changed   bool            `json:"changed"`
 	Strategy  string          `json:"strategy"`
 	// GateOnly 模式专属字段
-	HasPII   bool             `json:"has_pii,omitempty"`
-	Entities []entitySummary  `json:"entities,omitempty"`
-	Blocked  bool             `json:"blocked,omitempty"` // 是否因 block_types 命中而拦截
+	HasPII   bool            `json:"has_pii,omitempty"`
+	Entities []entitySummary `json:"entities,omitempty"`
+	Blocked  bool            `json:"blocked,omitempty"` // 是否因 block_types 命中而拦截
 }
 
 // entitySummary 极简 PII 实体摘要（gate_only 模式用，不含 start/end 避免泄漏结构）。
@@ -533,38 +534,38 @@ var opaqueBlockTypes = map[string]struct{}{
 	"tool_search_output":    {},
 	"additional_tools":      {},
 	// OpenAI / Anthropic 多模态二进制 part
-	"input_image":  {},
-	"input_file":   {},
-	"input_audio":  {},
-	"image":        {},
-	"output_image": {},
+	"input_image":         {},
+	"input_file":          {},
+	"input_audio":         {},
+	"image":               {},
+	"output_image":        {},
 	"computer_screenshot": {},
 	// Anthropic 思考块（重写会被拒）
-	"thinking":           {},
-	"redacted_thinking":  {},
+	"thinking":          {},
+	"redacted_thinking": {},
 	// Anthropic 上传容器指针
 	"container_upload": {},
 	// Anthropic / OpenAI web 工具结果
-	"web_search_call":   {}, // query 已在外层 actions 扫过；call 本身是 action 描述
-	"web_fetch_result":  {},
+	"web_search_call":  {}, // query 已在外层 actions 扫过；call 本身是 action 描述
+	"web_fetch_result": {},
 }
 
 // opaqueValueKeys JSON 对象的 key 命中 → 整个 value 子树跳过。
 // 这些字段要么是 base64 / 加密内容（重写即损坏），要么是上游校验用的 id / 签名。
 var opaqueValueKeys = map[string]struct{}{
 	// 通用：二进制 / base64 负载（OpenAI file_id 引用、Anthropic document source.data）
-	"data":               {},
-	"image_url":          {}, // OpenAI 多模态 {type:image_url, image_url:{url:data:...}}
-	"input_image":        {},
-	"input_audio":        {},
-	"file_id":            {},
-	"file":               {},
+	"data":        {},
+	"image_url":   {}, // OpenAI 多模态 {type:image_url, image_url:{url:data:...}}
+	"input_image": {},
+	"input_audio": {},
+	"file_id":     {},
+	"file":        {},
 	// Anthropic 思考 / 加密内容
-	"signature":          {}, // thinking.signature
-	"encrypted_content":  {}, // Anthropic web_search / web_fetch
-	"redacted_data":      {},
+	"signature":         {}, // thinking.signature
+	"encrypted_content": {}, // Anthropic web_search / web_fetch
+	"redacted_data":     {},
 	// OpenAI Responses 加密 / 内部
-	"summary":            {},
+	"summary": {},
 }
 
 // dataURLPrefixes 字符串值以这些前缀开头 → 整串跳过（base64 图像 / 音频）。

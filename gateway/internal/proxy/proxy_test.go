@@ -18,9 +18,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 
-	gatewayerrors "gateway/internal/errors"
 	"gateway/internal/cache"
 	"gateway/internal/detector"
+	gatewayerrors "gateway/internal/errors"
 	"gateway/internal/metrics"
 	"gateway/internal/pipeline"
 	"gateway/internal/replacer"
@@ -33,10 +33,10 @@ const testTTL = 30 * time.Minute
 
 // testProxy 自带一个「回声」上游，把收到的（已脱敏）内容原样返回，便于验证还原。
 type testProxy struct {
-	px          *Proxy
-	closeUp     func()
-	lastUpBody  string
-	mu          sync.Mutex
+	px         *Proxy
+	closeUp    func()
+	lastUpBody string
+	mu         sync.Mutex
 }
 
 // flushingRecorder 让 httptest.ResponseRecorder 支持 http.Flusher（流式响应必需）。
@@ -72,8 +72,8 @@ func newTestProxy(t *testing.T) *testProxy {
 				Role    string `json:"role"`
 				Content string `json:"content"`
 			} `json:"messages"`
-			Input string `json:"input"`
-			Stream bool `json:"stream"`
+			Input  string `json:"input"`
+			Stream bool   `json:"stream"`
 		}
 		_ = json.Unmarshal(b, &req)
 
@@ -369,7 +369,7 @@ func (failDetector) DetectBatch(ctx context.Context, _ []*types.DetectRequest) (
 	return nil, gatewayerrors.New(gatewayerrors.CodeDetectorUnavailable, "injected failure")
 }
 func (failDetector) Health(ctx context.Context) error { return nil }
-func (failDetector) Name() string                              { return "fail" }
+func (failDetector) Name() string                     { return "fail" }
 
 // TestProxy_FailClosed_Blocks fail_closed=true 时检测异常必须阻断（502）。
 func TestProxy_FailClosed_Blocks(t *testing.T) {
@@ -570,9 +570,9 @@ func TestProxy_ConversationIncremental(t *testing.T) {
 // TestProxy_ResponsesAPI_Anonymize 验证 OpenAI Responses API 路径（/v1/responses）协议级脱敏。
 // transform 是协议无关的递归改写器，T1 已写入全部 Responses 专属 opaque/block 类型；
 // 此处只证明 Responses 专属 shape 被正确处理：
-//   1. instructions / input[].content 进入 PII 上下文 → 手机号/邮箱被占位符化
-//   2. function_call.arguments 是 JSON 字符串 → 递归扫描内层字段
-//   3. reasoning 是 opaque block（opaqueBlockTypes）→ 整块跳过，内容原样透传不改写
+//  1. instructions / input[].content 进入 PII 上下文 → 手机号/邮箱被占位符化
+//  2. function_call.arguments 是 JSON 字符串 → 递归扫描内层字段
+//  3. reasoning 是 opaque block（opaqueBlockTypes）→ 整块跳过，内容原样透传不改写
 func TestProxy_ResponsesAPI_Anonymize(t *testing.T) {
 	tp := newTestProxy(t)
 	defer tp.closeUp()

@@ -155,7 +155,7 @@ func TestRedactValue_OpBlocks(t *testing.T) {
 			"content": []interface{}{
 				map[string]interface{}{"type": "text", "text": "请描述这张图"},
 				map[string]interface{}{
-					"type":     "image_url",
+					"type": "image_url",
 					"image_url": map[string]interface{}{
 						"url": "data:image/png;base64,abc",
 					},
@@ -188,9 +188,9 @@ func TestRedactValue_RegFunc(t *testing.T) {
 	convID := ""
 
 	in := map[string]interface{}{
-		"content":  "联系张三，手机 13800138000",
-		"role":     "user",
-		"api_key":  "sk-1234567890abcdef",
+		"content": "联系张三，手机 13800138000",
+		"role":    "user",
+		"api_key": "sk-1234567890abcdef",
 		"messages": []interface{}{
 			map[string]interface{}{"content": "邮箱 zhangsan@example.com"},
 		},
@@ -237,15 +237,15 @@ func TestPrivacyRedact_GateOnly(t *testing.T) {
 		require.Equal(t, 200, rec.Code)
 
 		var resp struct {
-			Text     string  `json:"text"`
-			HasPII   bool    `json:"has_pii"`
+			Text     string `json:"text"`
+			HasPII   bool   `json:"has_pii"`
 			Entities []struct {
 				Type  string  `json:"type"`
 				Value string  `json:"value"`
 				Score float64 `json:"score"`
 			} `json:"entities"`
-			Blocked  bool   `json:"blocked"`
-			Changed  bool   `json:"changed"`
+			Blocked   bool   `json:"blocked"`
+			Changed   bool   `json:"changed"`
 			RequestID string `json:"request_id"`
 		}
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
@@ -253,7 +253,7 @@ func TestPrivacyRedact_GateOnly(t *testing.T) {
 		require.NotEmpty(t, resp.Entities)
 		require.True(t, resp.Blocked) // 默认 block_types 为空 = 命中即 block
 		require.False(t, resp.Changed)
-		require.Equal(t, "", resp.RequestID) // gate_only 不创建 request_id
+		require.Equal(t, "", resp.RequestID)               // gate_only 不创建 request_id
 		require.Equal(t, "联系张三，手机 13800138000", resp.Text) // 原文原样
 	})
 
@@ -347,8 +347,8 @@ func TestPrivacyRedact_GateOnly(t *testing.T) {
 		require.Equal(t, 200, rec.Code)
 
 		var resp struct {
-			HasPII   bool `json:"has_pii"`
-			Blocked  bool `json:"blocked"`
+			HasPII   bool  `json:"has_pii"`
+			Blocked  bool  `json:"blocked"`
 			Entities []any `json:"entities"`
 		}
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))

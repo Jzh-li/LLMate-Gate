@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	gatewayerrors "gateway/internal/errors"
 	"gateway/internal/config"
+	gatewayerrors "gateway/internal/errors"
 	"gateway/internal/metrics"
 	"gateway/internal/proxy"
 )

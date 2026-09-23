@@ -10,11 +10,11 @@
 
 | 项 | 状态 |
 |---|---|
-| **HEAD** | `efbfdac`（reDate 日期跨度修复），工作树干净，**已推送 origin/main**（CI ⏳ 待验证） |
+| **HEAD** | `95a4848`（reDate 日期跨度修复 + 文档 + lint 收口），工作树干净，**与 origin/main 同步** |
 | **语料副本** | `bench/` 子模块本机为空目录；语料工作副本 = 独立克隆 `/home/jzhli/cn-pii-bench`，`dev` @ `b6779a7`（见 §3.2 第 6 坑） |
 | **仓可见性** | ✅ public（anonymous 可 clone） |
 | **Release** | ✅ `v0.1.0` 已发布：7 assets（6 平台 + SHA256SUMS） |
-| **CI** | ⏳ **待验证 @ `efbfdac`**。上一轮 `4f3ef42` / `f594c43` 均 **11 job 全绿**（verify / build / e2e / coverage / bench / bench-gate / bench-baseline / lint / vscode-ext / **perf** / vuln）。`bench perf guard` 在 `3ed9720` 曾红（假阳性，已修，见 §14 与 `Specs/06` B-23） |
+| **CI** | ✅ **11 job 全绿 @ `95a4848`**（verify / build / e2e / coverage / bench / bench-gate / bench-baseline / lint / vscode-ext / **perf** / vuln）。过程：`2ef4fc8` 曾因 lint 红一次（`hasType` 变成未引用函数），`95a4848` 修掉 —— 见 §15 末。更早 `3ed9720` 的 perf 红是假阳性（见 §14 与 `Specs/06` B-23） |
 | **Go 版本** | CI `1.25.13`；`gateway/go.mod` 声明 `go 1.24` |
 | **合成语料 F1** | 1.0000（中文 240 + 英文 180）—— **过拟合基线，不是对外宣称值** |
 | **真对抗 F1** | span **0.7027**（主口径）/ strict **0.6486**（下界）/ 悲观 0.6933（28 条 / 48 GT；09-23 复跑逐位不变） |
@@ -647,6 +647,7 @@ README 基线同步，**评估器脚本零改动**。
 | 提交 | 内容 |
 |---|---|
 | `efbfdac` | **reDate 日期跨度修复**：日分支由短优先改长优先，`2024-09-17` 不再被截断成 `2024-09-1` |
+| `95a4848` | **lint 收口**：删除失去引用的测试 helper `hasType`（`2ef4fc8` 曾因此红 lint） |
 
 语料侧：**零改动**（不动语料、也不动评估器）。这是本轮与 09-21 那轮最大的不同 ——
 **指标逐位不变**，改动只是让检出更正确。
@@ -723,4 +724,17 @@ span 外的尾巴留在输出里。实测：
 - `.gitmodules` 的 `branch = main` vs 活跃线 `dev` —— 等拍板；
 - 矩阵语料要不要从「诊断」升为「门禁」（`cn-pii-bench` 任务 1.9）—— 质量标准决策；
 - 是否上 NER sidecar —— 属 v1.1，阻塞在延迟。
+
+### 过程记录：CI 红了一次，是 lint 的 `unused`
+
+`2ef4fc8`（文档提交）上 `golangci-lint` 红：
+`gateway/internal/detector/regex_shape_test.go:127: func hasType is unused`。
+根因是 `efbfdac` 的重构 —— `hasType` 的唯一调用者正是那个「date 只断言类型出现」
+的 `typeCases` 分支；把 date 升级为断言完整值后它就被孤立了。
+`95a4848` 删除该 helper（而不是硬留一个调用），该提交上 11/11 全绿。
+
+教训：**加强断言会顺手制造死代码。** 升级断言粒度时，要回头看在「弱断言」
+条件下才需要的 helper 与分支还有没有调用者。本机没有 golangci-lint，
+这类问题只能靠 CI 反馈 —— 所以推送后要看完 11 个 job，
+不能只盯自己关心的那两个（`bench gate` / `perf` 本轮全过，红的是 `lint`）。
 

@@ -59,9 +59,14 @@ type GatewayConfig struct {
 	ControlAuthToken string           `yaml:"control_auth_token"`
 	UpstreamAPIKey   string           `yaml:"upstream_api_key"`
 	Upstreams        []UpstreamConfig `yaml:"upstreams"`
-	RequestTimeout   time.Duration    `yaml:"request_timeout"`
-	Debug            bool             `yaml:"debug"`
-	LogLevel         string           `yaml:"log_level"`
+	// RequestTimeout **尚未生效**：除 Validate() 里补默认值外没有任何读者，
+	// 网关不会据此设置上游超时。契约 §3.3 声明了它，实现未接上（Specs/06 #31）。
+	RequestTimeout time.Duration `yaml:"request_timeout"`
+	Debug          bool          `yaml:"debug"`
+	// LogLevel **尚未生效**：除 Default() 赋 "info" 外没有任何读者，全仓也没有任何
+	// 日志级别过滤机制（未引入 slog / LevelVar）——写 debug 不会多出任何日志。
+	// 这一条最容易被误以为生效：用户改了级别、什么都没发生，且无从察觉（Specs/06 #31）。
+	LogLevel string `yaml:"log_level"`
 }
 
 // UpstreamConfig 按协议路由的上游（各家厂商适配，配置驱动而非写死代码）。
@@ -88,6 +93,13 @@ type DetectionConfig struct {
 	Cache      CacheConfig        `yaml:"cache"`
 	Registry   RegistryConfig     `yaml:"registry"`
 	// FallbackRegex 为格式固定的实体提供正则加速通道（不经过模型）。
+	//
+	// ⚠️ **尚未生效**：除 Default() 赋 true 外没有任何读者。配了它也不会让任何实体
+	// 绕过模型——`engine: pii-engineer` 时全部实体仍然进模型。
+	//
+	// 它比其他空转键更需要说清楚：承诺的不是「某个开关不灵」，而是「**数据是否送模型**」。
+	// 用户照 README 配好之后，会以为格式固定的实体（手机号/身份证）没出机器，
+	// 实际都发出去了。见 Specs/06 #31。
 	FallbackRegex bool `yaml:"fallback_regex"`
 }
 
@@ -103,12 +115,20 @@ type RegistryConfig struct {
 
 // SidecarConfig PII Engineer sidecar 进程管理配置。
 type SidecarConfig struct {
-	Command      string        `yaml:"command"`
-	Endpoint     string        `yaml:"endpoint"`
-	Healthz      string        `yaml:"healthz"`
+	Command  string `yaml:"command"`
+	Endpoint string `yaml:"endpoint"`
+	Healthz  string `yaml:"healthz"`
+
+	// —— 以下三个键**尚未生效**（Specs/06 #31）——
+	//
+	// 全仓没有一处 os/exec 调用：网关从不拉起 sidecar 子进程，只按 endpoint 连接
+	// 既有服务（等价于 auto_start 恒为 false）。因此 auto_start=true 不会启动任何
+	// 子进程，start_timeout / restart_limit 也没有可作用的监督逻辑。
+	// 契约第 3 节声明了「由网关 exec 拉起 command」，实现未接上。
 	StartTimeout time.Duration `yaml:"start_timeout"`
 	RestartLimit int           `yaml:"restart_limit"`
 	// AutoStart 为 false 时不拉起子进程，仅连接既有 endpoint（Docker/手动部署场景）。
+	// ⚠️ **尚未生效**：true 与 false 当前无差别，因为实现里不存在拉起子进程的代码。
 	AutoStart bool `yaml:"auto_start"`
 }
 
@@ -170,7 +190,10 @@ type PolicyConfig struct {
 
 // VaultConfig 映射表加密存储配置。
 type VaultConfig struct {
-	Path          string        `yaml:"path"`
+	Path string `yaml:"path"`
+	// Encryption / KeyDerivation **不可配**：算法写死在 vault 实现里（见
+	// vaultEncryptionAlgorithm / vaultKeyDerivation）。键保留是为了不打断已发布配置，
+	// 但取值被收窄到「写死的那个」——写别的值启动期报错（Specs/06 #31）。
 	Encryption    string        `yaml:"encryption"`
 	KeyDerivation string        `yaml:"key_derivation"`
 	RequestTTL    time.Duration `yaml:"request_ttl"`
@@ -404,6 +427,17 @@ func validateAlwaysOn(key string, v bool) error {
 			"remove the key (it defaults to true) or set it to true", key)
 }
 
+// vault 实现里**写死**的算法（vault.go 的 NewMemVault：scrypt 派生 → AES-256-GCM）。
+//
+// 配置里的 vault.encryption / vault.key_derivation 因此改变不了任何行为。保留这两个键
+// 而不删，是因为删了会让已发布配置在严格解析下拒绝启动（同 policy 的两个假开关）；
+// 但合法取值必须收窄到「写死的那个」——否则写 pbkdf2 会被静默接受，用户以为换了算法。
+// 收窄的理由与做法见 Specs/06 #31 与 #26。
+const (
+	vaultEncryptionAlgorithm = "aes-256-gcm"
+	vaultKeyDerivation       = "scrypt"
+)
+
 // Validate 启动期一次性校验（契约 §3.3）。失败即退出，不做降级。
 func (c *Config) Validate() error {
 	if strings.TrimSpace(c.Gateway.Upstream) == "" {
@@ -481,8 +515,21 @@ func (c *Config) Validate() error {
 				"(sealed files cannot be read back because the key is per-process and never stored); "+
 				"remove vault.persist from your config, or state your persistence requirement as an issue")
 	}
-	if c.Vault.Encryption != "" && c.Vault.Encryption != "aes-256-gcm" {
-		return gatewayerrors.Errorf(gatewayerrors.CodeInvalidConfig, "unsupported vault.encryption: %q", c.Vault.Encryption)
+	// vault.encryption / vault.key_derivation 是**不可配**的键：vault 把算法写死在
+	// 实现里（见上面的常量），这两个键取任何值都不改变行为。所以只接受「写死的那个」
+	// 或省略 —— 写别的值在启动期报错，而不是收下再静默忽略。
+	//
+	// 这比「纯死字段」更需要注意：校验的存在会让键看起来是活的（用户读到
+	// 「unsupported vault.encryption」会以为其它算法是可以配的，只是不支持而已）。
+	if c.Vault.Encryption != "" && c.Vault.Encryption != vaultEncryptionAlgorithm {
+		return gatewayerrors.Errorf(gatewayerrors.CodeInvalidConfig,
+			"unsupported vault.encryption: %q (the vault always uses %s; "+
+				"remove the key or set it to %s)", c.Vault.Encryption, vaultEncryptionAlgorithm, vaultEncryptionAlgorithm)
+	}
+	if c.Vault.KeyDerivation != "" && c.Vault.KeyDerivation != vaultKeyDerivation {
+		return gatewayerrors.Errorf(gatewayerrors.CodeInvalidConfig,
+			"unsupported vault.key_derivation: %q (the vault always derives its key with %s; "+
+				"remove the key or set it to %s)", c.Vault.KeyDerivation, vaultKeyDerivation, vaultKeyDerivation)
 	}
 	for k, v := range c.Detection.Thresholds {
 		if v < 0 || v > 1 {

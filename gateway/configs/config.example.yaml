@@ -18,11 +18,12 @@ gateway:
   #   ↑ 控制面 /v1/privacy/* 的独立令牌。控制面能按 request_id 还原原文，数据面只转发；
   #     给 hooks 的凭据不该同时具备「还原任意历史请求原文」的能力。留空则复用 auth_token。
   upstream_api_key: "${OPENAI_API_KEY}"  # 转发上游时使用的密钥，不透传客户端凭证
+  # ⚠️ request_timeout / log_level 目前**尚未生效**（已定义、无读取方）。见 Specs/06 #31。
   request_timeout: "30s"
   debug: true                            # 内嵌调试面板（--no-debug 可彻底关闭）。
                                          # 静态壳仅回环可达；数据接口 /_api/* 需控制面令牌，
                                          # 首次用 http://127.0.0.1:8400/_debug?token=<令牌> 打开一次即可。
-  log_level: "info"
+  log_level: "info"                      # ⚠️ 尚未生效：改它不会改变任何日志输出
 
   # 按协议声明的多上游（可选）。网关入口同时暴露 OpenAI 兼容
   # （/v1/chat/completions 等）与 Anthropic 兼容（/v1/messages）两类端点，
@@ -45,14 +46,20 @@ detection:
   # pii-engineer : 调用 PII Engineer sidecar（Rust/ONNX，中文 F1 0.918）
   # regex        : 内置中文正则引擎，无需模型，开箱即用（默认）
   engine: "regex"
-  fallback_regex: true                   # 格式固定实体走正则加速，不进模型
+  # ⚠️ fallback_regex 目前**尚未生效**（已定义、无读取方）：配成 true 也不会让任何实体
+  #    绕过模型——engine=pii-engineer 时全部实体仍然进模型。它承诺的是「数据是否送模型」
+  #    这条隐私/性能边界，所以别照下面这行推断「格式固定的实体没出机器」。见 Specs/06 #31。
+  fallback_regex: true                   # 格式固定实体走正则加速，不进模型（尚未生效）
   sidecar:
     command: "cargo run --release"       # 拉起 PII Engineer
     endpoint: "http://127.0.0.1:8000"
     healthz: "/healthz"
+    # ⚠️ 以下三个键目前**尚未生效**：网关从不 exec 任何子进程，只按 endpoint 连接既有
+    #    服务。因此 auto_start=true 不会启动子进程，start_timeout / restart_limit 也没有
+    #    可作用的监督逻辑。见 Specs/06 #31。
     start_timeout: "60s"
     restart_limit: 3
-    auto_start: false                    # true 时由网关 exec 拉起子进程
+    auto_start: false                    # true 时由网关 exec 拉起子进程（尚未生效）
   thresholds:                            # score >= 阈值才脱敏
     zh_person_name: 0.5
     zh_phone: 0.8
@@ -182,6 +189,9 @@ judgment:
 
 vault:
   path: "./vault_data"
+  # ⚠️ encryption / key_derivation **不可配**：算法写死在 vault 实现里（scrypt → AES-256-GCM），
+  #    这两个键取任何值都不改变行为。键保留是为了不打断已发布配置，但只能填下面这两个值
+  #    （或省略）——填别的会在启动期报错，而不是被静默接受（Specs/06 #31）。
   encryption: "aes-256-gcm"
   key_derivation: "scrypt"
   request_ttl: "30m"

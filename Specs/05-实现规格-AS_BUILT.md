@@ -1,6 +1,6 @@
 # LLMate Gate 实现规格（AS-BUILT）
 
-> **文档版本**：v1.8（2026-09-23）
+> **文档版本**：v1.9（2026-09-23）
 > **层级**：L2-AsBuilt（实现现状规格）
 > **取证基线**：`origin/main @ ca63991`（v1.0 取证于 `c64f246`，其后历版为 `0a21dfa` → `ca63991`；
 > v1.1 增补第 6 批缺陷修复；
@@ -12,7 +12,9 @@
 > §7.2 指标 16 → 19；
 > v1.7 §15.5 补「阈值表的键 = 后端自报名」不变量（`Specs/06` #29）；§12.2 记本机
 > golangci-lint 已就位（此前 lint 类问题只能靠 CI 反馈）；
-> v1.8 §12.2 记格式门禁已补（`Specs/06` #30：`formatters` 未声明 ⇒ 格式一致性零门禁））
+> v1.8 §12.2 记格式门禁已补（`Specs/06` #30：`formatters` 未声明 ⇒ 格式一致性零门禁）；
+> v1.9 §12.1 记 8 个「零读者 / 仅校验」配置键的处置（`Specs/06` #31）+ **修正 §4.1 对
+> `fallback_regex` 的错误陈述**（原文描述了并不存在的行为））
 > **取证方法**：全量 `git log`（92 commit）+ 逐包读源码 + 本机实际编译运行验证。
 > **核心规则**：**本文档以代码为唯一事实来源。** 任何与 `HANDOFF.md` / `Specs/00` 冲突之处，以本文档为准；本文档与代码冲突时，以代码为准并回来更新本文档。
 > **不回答的问题**：为什么这样设计（见 `Specs/00`）、原始排期（见 `Specs/01`）。
@@ -221,20 +223,20 @@ gateway:
       api_key: "${DEEPSEEK_API_KEY}"   # 留空 = 透传客户端鉴权头
       api_version: "2023-06-01"
       path_prefix: ""          # 替换入口路径的 /v1 段（GLM=/v4，DashScope=/compatible-mode/v1）
-  request_timeout: "30s"
+  request_timeout: "30s"       # ⚠️ 尚未生效（无读者）
   debug: true
-  log_level: "info"
+  log_level: "info"            # ⚠️ 尚未生效（无读者，也没有级别过滤机制）
 
 detection:
   engine: "regex"              # regex | pii-engineer
-  fallback_regex: true         # 格式固定实体走正则加速，不进模型
+  fallback_regex: true         # ⚠️ 尚未生效（无读者）：不会让任何实体绕过模型
   sidecar:
     command: "cargo run --release"
     endpoint: "http://127.0.0.1:8000"
     healthz: "/healthz"
-    start_timeout: "60s"
-    restart_limit: 3
-    auto_start: false
+    start_timeout: "60s"       # ⚠️ 尚未生效（无读者）
+    restart_limit: 3           # ⚠️ 尚未生效（无读者）
+    auto_start: false          # ⚠️ 尚未生效（全仓无 os/exec，从不拉起子进程）
   thresholds: { zh_phone: 0.8, ... }
   cache:
     enabled: true
@@ -264,8 +266,8 @@ policy:
 
 vault:
   path: "./vault_data"
-  encryption: "aes-256-gcm"
-  key_derivation: "scrypt"
+  encryption: "aes-256-gcm"    # 不可配：只接受这个值或省略，写别的启动期报错
+  key_derivation: "scrypt"     # 不可配：同上
   request_ttl: "30m"
   persist: false
 
@@ -320,7 +322,12 @@ audit:
 
 `main.go:83-91`：`regex` 走内置正则引擎；`pii-engineer` 走 sidecar HTTP 客户端（500ms 超时）。
 
-`fallback_regex: true` 的含义是「格式固定实体走正则加速通道，不进模型」——即模型只负责弱格式实体。
+> ⚠️ **修正（2026-09-23，v1.9）**：本文档此前在此处写
+> 「`fallback_regex: true` 的含义是『格式固定实体走正则加速通道，不进模型』」——
+> **这句话描述的行为不存在**。`detection.fallback_regex` 除 `Default()` 赋 `true` 外
+> **没有任何读取方**，配了它也不会让任何实体绕过模型；`engine: pii-engineer` 时全部实体
+> 仍进模型。这一条不是「某个开关不灵」，它承诺的是**数据是否送模型**
+> （隐私 + 性能），因此必须显式更正。同族共 8 个键，见 §12.1 与 `Specs/06` #31。
 
 ### 4.2 实体类型权威表（15 类）
 
@@ -862,6 +869,8 @@ python3 bench_runner_adversarial.py --endpoint http://127.0.0.1:8413/v1/privacy/
 | P2-8 | 「可仿真类型」清单在 `config`/`simulator` 两处各写一份，会漂移 | 🟢 低 | ✅ 已修（`simulator.simulatable` 为唯一权威表） |
 | P2-9 | 上游合并语义在启动建路由与配置打印两处各写一份 | 🟢 低 | ✅ 已修（`config.EffectiveUpstreams()` 单一实现） |
 | **B-19** | **表驱动重构把「读一个 bool」变成「按值拷贝整个 `SimulateZHConfig`」（含 `Dictionary` 的 map 头）→ 与 `SetDictionary` 的写入构成数据竞态，CI `verify` 的 `-race` 红灯**；连带 `replacer.Strategy()` / `NewSession()` 也在锁外读 `r.cfg` | 🔴 高 | ✅ 已修（`cfg` 不导出 + `enabled()` 锁内求值 + `Strategy()`/`NewSession()` 锁内快照，见 §5.2） |
+| **#26** | `policy.tool_call_scan` / `stream_restore` 是空转的假开关 | 🟡 中 | ✅ 已修（收窄成只能为真，写 false 启动期报错；见 `Specs/06` #26） |
+| **#31** | **8 个「零读者 / 仅校验」配置键** —— `gateway.request_timeout`、`gateway.log_level`、`detection.fallback_regex`、`sidecar.{start_timeout,restart_limit,auto_start}`、`vault.key_derivation` 零读取方；`vault.encryption` 仅被校验、不被使用 | 🟡 中 | ✅ 已修（2026-09-23）：字段与示例配置逐条标注「尚未生效」；两个不可配的 vault 键**收窄成唯一合法值**（写别的启动期报错）+ 单测。**未改行为、未删除任何键**——实现与否留给后续决定，见 `Specs/06` #31 |
 
 ### 12.2 未修 / 明确不做
 

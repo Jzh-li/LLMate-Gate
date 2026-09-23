@@ -507,3 +507,39 @@ detection:
 		require.Equal(t, "Path", typ.Field(1).Name)
 	})
 }
+
+// TestValidate_VaultAlgorithmsNotConfigurable vault.encryption / key_derivation 的算法
+// 写死在 vault 实现里（scrypt → AES-256-GCM），配置改变不了任何行为。
+//
+// 这两个键因此只接受「写死的那个」或省略。写别的值必须**启动期报错**——否则写
+// pbkdf2 会被静默接受，用户以为换了算法。这是「不可配的键必须收窄取值」的落点，
+// 与 policy 两个假开关同一处置（Specs/06 #26 / #31）。
+func TestValidate_VaultAlgorithmsNotConfigurable(t *testing.T) {
+	// 缺省合法：Default() 填的就是那唯一合法值，所以「键留着不删」的配置照样能启动。
+	c := Default()
+	require.NoError(t, c.Validate())
+	require.Equal(t, vaultEncryptionAlgorithm, c.Vault.Encryption)
+	require.Equal(t, vaultKeyDerivation, c.Vault.KeyDerivation)
+
+	// 省略也合法（用户把键删掉之后不应被拒）。
+	c = Default()
+	c.Vault.Encryption = ""
+	c.Vault.KeyDerivation = ""
+	require.NoError(t, c.Validate(), "省略这两个键必须合法，否则删除键的用户会被挡在启动外")
+
+	// 写别的算法：报错，且错误信息要说清「永远是那个值」，而不只是「不支持」——
+	// 后者会让用户以为换个算法就行。
+	c = Default()
+	c.Vault.Encryption = "chacha20-poly1305"
+	err := c.Validate()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "vault.encryption")
+	require.Contains(t, err.Error(), "always uses")
+
+	c = Default()
+	c.Vault.KeyDerivation = "pbkdf2"
+	err = c.Validate()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "vault.key_derivation")
+	require.Contains(t, err.Error(), "always derives")
+}

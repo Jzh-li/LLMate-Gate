@@ -331,7 +331,9 @@ gateway:
 
 detection:
   engine: "pii-engineer"      # 中文 NER (F1 0.918)
-  fallback_regex: true        # 格式固定的实体用正则加速
+  # ⚠️ fallback_regex 尚未生效：配成 true 也不会让任何实体绕过模型 ——
+  #    engine=pii-engineer 时全部实体仍然进模型。别据它推断「格式固定的实体没出机器」。
+  fallback_regex: true        # 格式固定的实体用正则加速（尚未生效，见 Specs/06 #31）
   cache:
     enabled: true
     bind_conversation: true   # 绑定 conversation_id 做增量

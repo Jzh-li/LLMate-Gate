@@ -123,16 +123,6 @@ func TestRegexEngine_DateSpan(t *testing.T) {
 	}
 }
 
-// hasType 判断结果集里是否存在某个类型的实体。
-func hasType(got map[string]bool, typ string) bool {
-	for k := range got {
-		if strings.HasPrefix(k, typ+"=") {
-			return true
-		}
-	}
-	return false
-}
-
 // TestRegexEngine_ShapeToleranceRejectsMixedSeparators 归一化会把相邻 token 拼成
 // 更长的数字串 —— 这是它唯一引入的新误报面。分隔符混用即判定为「拼出来的」并丢弃：
 // 同一串 Luhn 合法的数字，分隔符一致时报出，混用时不报。

@@ -172,6 +172,14 @@ func peelWrappers(argv []string) (inner string, rest []string) {
 	return "", argv[i:]
 }
 
+// isIdentChar 环境变量名允许的字符：ASCII 字母、数字、下划线。
+//
+// 刻意不用 unicode.IsLetter —— 它接受非 ASCII 字母，会把 `名字=值` 也认成赋值。
+// shell 的变量名是窄字符集，这里跟着窄。
+func isIdentChar(r rune) bool {
+	return r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'
+}
+
 // isAssignment 该 token 是否是 `NAME=value` 形态（且不是 URL 或选项）。
 func isAssignment(tok string) bool {
 	if tok == "" || strings.HasPrefix(tok, "-") {
@@ -186,7 +194,7 @@ func isAssignment(tok string) bool {
 		return false
 	}
 	for _, r := range name {
-		if !(r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
+		if !isIdentChar(r) {
 			return false
 		}
 	}

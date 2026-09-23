@@ -1,6 +1,6 @@
 # LLMate Gate 实现规格（AS-BUILT）
 
-> **文档版本**：v1.9（2026-09-23）
+> **文档版本**：v1.10（2026-09-23）
 > **层级**：L2-AsBuilt（实现现状规格）
 > **取证基线**：`origin/main @ ca63991`（v1.0 取证于 `c64f246`，其后历版为 `0a21dfa` → `ca63991`；
 > v1.1 增补第 6 批缺陷修复；
@@ -14,7 +14,10 @@
 > golangci-lint 已就位（此前 lint 类问题只能靠 CI 反馈）；
 > v1.8 §12.2 记格式门禁已补（`Specs/06` #30：`formatters` 未声明 ⇒ 格式一致性零门禁）；
 > v1.9 §12.1 记 8 个「零读者 / 仅校验」配置键的处置（`Specs/06` #31）+ **修正 §4.1 对
-> `fallback_regex` 的错误陈述**（原文描述了并不存在的行为））
+> `fallback_regex` 的错误陈述**（原文描述了并不存在的行为）；
+> v1.10 §12.1 记「文档/help 命令级承诺」的修正（`Specs/06` #32，本轮只做文档侧）；
+> §12.2 增三条待定 —— 启动期错误不带 cause、usage 承诺的 `-V` 未注册、
+> 示例配置测试只硬编码单文件）
 > **取证方法**：全量 `git log`（92 commit）+ 逐包读源码 + 本机实际编译运行验证。
 > **核心规则**：**本文档以代码为唯一事实来源。** 任何与 `HANDOFF.md` / `Specs/00` 冲突之处，以本文档为准；本文档与代码冲突时，以代码为准并回来更新本文档。
 > **不回答的问题**：为什么这样设计（见 `Specs/00`）、原始排期（见 `Specs/01`）。
@@ -871,6 +874,7 @@ python3 bench_runner_adversarial.py --endpoint http://127.0.0.1:8413/v1/privacy/
 | **B-19** | **表驱动重构把「读一个 bool」变成「按值拷贝整个 `SimulateZHConfig`」（含 `Dictionary` 的 map 头）→ 与 `SetDictionary` 的写入构成数据竞态，CI `verify` 的 `-race` 红灯**；连带 `replacer.Strategy()` / `NewSession()` 也在锁外读 `r.cfg` | 🔴 高 | ✅ 已修（`cfg` 不导出 + `enabled()` 锁内求值 + `Strategy()`/`NewSession()` 锁内快照，见 §5.2） |
 | **#26** | `policy.tool_call_scan` / `stream_restore` 是空转的假开关 | 🟡 中 | ✅ 已修（收窄成只能为真，写 false 启动期报错；见 `Specs/06` #26） |
 | **#31** | **8 个「零读者 / 仅校验」配置键** —— `gateway.request_timeout`、`gateway.log_level`、`detection.fallback_regex`、`sidecar.{start_timeout,restart_limit,auto_start}`、`vault.key_derivation` 零读取方；`vault.encryption` 仅被校验、不被使用 | 🟡 中 | ✅ 已修（2026-09-23）：字段与示例配置逐条标注「尚未生效」；两个不可配的 vault 键**收窄成唯一合法值**（写别的启动期报错）+ 单测。**未改行为、未删除任何键**——实现与否留给后续决定，见 `Specs/06` #31 |
+| **#32** | **文档/help 给出的命令与实现不符** —— README「从源码构建」两条命令都跑不通（`--upstream` 这个 flag 不存在、`configs/config.yaml` 这个文件不存在），同名标题还出现两节 | 🟡 中 | ⏸ 文档侧已修（2026-09-23，`66bf806`）：补 `cp config.example.yaml config.yaml` 一步、删掉错位的重复节、加「上游只能写在配置文件里」说明。**代码侧 3 条见 §12.2** |
 
 ### 12.2 未修 / 明确不做
 
@@ -881,6 +885,9 @@ python3 bench_runner_adversarial.py --endpoint http://127.0.0.1:8413/v1/privacy/
 | — | `pii-engineer` sidecar 为 mock | 能力缺口 | 客户端已就绪，无真实 NER 服务 |
 | — | ~~本机没有 golangci-lint~~ | ✅ 已解决 | 此前 lint 类问题**只能靠 CI 反馈**（`unused` 一次、`QF1001` 一次）。现已在本机装上 CI 同版本（v2.6.1，`/home/jzhli/.gotmp/golangci-lint-2.6.1-linux-arm64/`），**推之前先跑**：`HOME=/home/jzhli XDG_CACHE_HOME=/home/jzhli/.cache TMPDIR=/home/jzhli/.gotmp <bin> run --timeout 5m --config .golangci.yml`。三个坑：解包要 `tar --no-same-owner`（release tarball 的 uid/gid 本机不存在），运行时必须给 `HOME`/`XDG_CACHE_HOME`（否则去 `mkdir /root/.cache` 被拒），**且必须给 `TMPDIR`** —— `/tmp` 是 10MB tmpfs，漏了会报 `write /tmp/go-build…/importcfg: no space left on device`（看着像磁盘满，实际 `/home` 还有 332G）；且 `go` 要走绝对路径（PATH 里那个是 1.15.9）。详见 `HANDOFF.md` §16 收口段 |
 | — | ~~格式一致性零门禁~~ | ✅ 已解决（`Specs/06` #30） | `.golangci.yml` 缺 `formatters` 段 —— v2 里 gofmt/goimports **不在 `linters` 下**，不显式声明就完全不跑。已加 `formatters: enable: [gofmt]` 并全仓 `gofmt -w`。**注意 `issues.uniq-by-line`（默认 true）按行去重**：一行既不合格式又被别的 linter 命中时只显示后者，属可用性差异而非盲区 |
+| — | 启动期错误不带 cause（`Cause()` 全仓零调用） | ⏸ **待定**（`Specs/06` #32-E） | `errors.Error()` 有意不带 cause（「不对外暴露内部细节」），但日志侧也没有补 `Cause()` ⇒ 启动报 `config error: invalid_config: read config file`，看不出是路径写错、权限不足还是路径是个目录。修法：新增 `errors.LogString`（Code+Message 后附 cause），8 处 `log.Fatalf` 改用它，**不动 `Error()` 与 HTTP 响应**。2026-09-23 拍板本轮不做 |
+| — | usage 承诺的 `-V` 别名未注册 | ⏸ **待定**（`Specs/06` #32-A） | `cmd/llmate-gate/main.go:54` 的 help 文本写着 `(also -V)`，但只注册了 `version`；实测 `-V` 报 `flag provided but not defined: -V`（exit 2）—— 同一条 usage 输出里自相矛盾。修法：注册一行（Unix 惯例），或反向删掉那段文本 |
+| — | `TestExampleConfig_Loads` 只硬编码单个文件 | ⏸ **待定**（`Specs/06` #32-F） | 目前只测 `configs/config.example.yaml`；改为遍历 `configs/*.yaml` 后，以后新增的配置文件会自动进入门禁 |
 
 ### 12.3 已声明的能力边界（**非缺陷**）
 

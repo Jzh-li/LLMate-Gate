@@ -209,8 +209,19 @@ llmate-gate --version
 git clone https://github.com/Jzh-li/LLMate-Gate
 cd LLMate-Gate/gateway
 go build -o llmate-gate ./cmd/llmate-gate
+
+# 示例配置 schema 正确、启动期校验通过，可以直接用；要接真实上游再改它。
+# （configs/config.yaml 是你本地的配置文件；首次运行会在同目录生成 auth_token）
+cp configs/config.example.yaml configs/config.yaml
 ./llmate-gate --config configs/config.yaml   # 默认监听 :8400，调试面板默认开启
+
+# 桌面 UI（Tauri）
+# ⚠️ 未启动：仓库无 desktop/ 目录，Tauri 属 Phase 4 待办（见 HANDOFF §5）
 ```
+
+> **上游地址只能写在配置文件里**：`gateway.upstream`（单上游）或 `gateway.upstreams[]`
+> （按协议分流）。命令行**没有** `--upstream` 这类覆盖开关，只支持
+> `--config` / `--listen` / `--no-debug` / `--version`。
 
 ### 选项 4：自交叉编译（多平台 release）
 
@@ -228,19 +239,6 @@ go build -o llmate-gate ./cmd/llmate-gate
 ```bash
 # 规划形态，暂不可用
 docker run -d -p 8400:8400 ghcr.io/llmate/llmate-gate:latest
-```
-
-### 从源码构建
-
-```bash
-# 代理守护进程（Go）
-git clone https://github.com/Jzh-li/LLMate-Gate
-cd LLMate-Gate/gateway
-go build -o llmate-gate ./cmd/llmate-gate
-./llmate-gate --listen :8400 --upstream https://api.openai.com
-
-# 桌面 UI（Tauri）
-# ⚠️ 未启动：仓库无 desktop/ 目录，Tauri 属 Phase 4 待办（见 HANDOFF §5）
 ```
 
 ### VS Code 扩展

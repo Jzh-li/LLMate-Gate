@@ -383,8 +383,10 @@ jobs:
           cache: true
           cache-dependency-path: gateway/go.sum
 
-      # 静态分析门禁：规则集见 gateway/.golangci.yml（errcheck/govet/staticcheck/
-      # unused/ineffassign/misspell/unconvert/copyloopvar，2026-09-12 本地清零）。
+      # 静态分析门禁：规则集见 gateway/.golangci.yml（linters: errcheck/govet/
+      # staticcheck/unused/ineffassign/misspell/unconvert/copyloopvar，2026-09-12 本地清零；
+      # formatters: gofmt，2026-09-23 补 —— v2 里 formatter 不写在 linters 下，不显式声明
+      # 就完全不跑，这正是 Specs/06 #30 那个 11 天没人看见的格式残渣能活下来的原因）。
       # 固定 golangci-lint v2.6.1：官方 action v9 预编译二进制，避免 go install 受 module
       # go directive 限制；v9 为 Node 24 runtime。v2.13.2 起要求 Go >=1.26。
       - name: lint

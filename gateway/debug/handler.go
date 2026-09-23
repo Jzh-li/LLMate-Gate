@@ -84,19 +84,20 @@ func NewHandler(o Options) *Handler {
 // Mount 把 debug 路由挂到 mux（受 --no-debug 门控由调用方决定）。
 //
 // 路由：
-//   GET    /_debug         → HTML（embed）
-//   GET    /_debug/...     → 静态资源（JS/CSS）
-//   WS     /ws/events      → 流量事件推送
-//   GET    /_api/traffic   → 拉取环形缓冲
-//   DELETE /_api/traffic   → 清空
-//   POST   /_api/detect    → Playground: 仅检测
-//   POST   /_api/replace   → Playground: 检测 + 替换
-//   GET    /_api/rules     → 当前规则
-//   PUT    /_api/rules     → 更新策略（热加载）
-//   GET    /_api/dictionary → 仿真词典
-//   PUT    /_api/dictionary → 整体替换仿真词典（热加载）
-//   GET    /_api/registry  → 登记表（明文 PII，仅回环可访问）
-//   PUT    /_api/registry  → 整体替换登记表并落盘（热加载 + 刷检测缓存）
+//
+//	GET    /_debug         → HTML（embed）
+//	GET    /_debug/...     → 静态资源（JS/CSS）
+//	WS     /ws/events      → 流量事件推送
+//	GET    /_api/traffic   → 拉取环形缓冲
+//	DELETE /_api/traffic   → 清空
+//	POST   /_api/detect    → Playground: 仅检测
+//	POST   /_api/replace   → Playground: 检测 + 替换
+//	GET    /_api/rules     → 当前规则
+//	PUT    /_api/rules     → 更新策略（热加载）
+//	GET    /_api/dictionary → 仿真词典
+//	PUT    /_api/dictionary → 整体替换仿真词典（热加载）
+//	GET    /_api/registry  → 登记表（明文 PII，仅回环可访问）
+//	PUT    /_api/registry  → 整体替换登记表并落盘（热加载 + 刷检测缓存）
 func (h *Handler) Mount(mux *http.ServeMux) {
 	mux.HandleFunc("/_debug", loopbackOnly(h.serveIndex))
 	mux.HandleFunc("/_debug/", loopbackOnly(h.serveAsset))

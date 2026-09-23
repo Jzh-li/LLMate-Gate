@@ -28,10 +28,11 @@ func TestIsInternationalCard(t *testing.T) {
 		{"6222021234567890123", false}, // 银联 62 + 19 位（中国借记卡）
 		{"6212345678901234", false},    // 银联 62 + 16 位（典型中国银联）
 		// 长度异常
-		{"411111111111", false},            // 12 位
-		{"41111111111111111111", false},    // 20 位
+		{"411111111111", false},         // 12 位
+		{"41111111111111111111", false}, // 20 位
 	}
-	for _, tc := range cases {		t.Run(tc.v, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.v, func(t *testing.T) {
 			if got := IsInternationalCard(tc.v); got != tc.want {
 				t.Errorf("IsInternationalCard(%q) = %v, want %v", tc.v, got, tc.want)
 			}
@@ -61,7 +62,8 @@ func TestValidUSSSN(t *testing.T) {
 		{"123-00-6789", false},
 		{"123-45-0000", false},
 	}
-	for _, tc := range cases {		t.Run(tc.v, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.v, func(t *testing.T) {
 			if got := ValidUSSSN(tc.v); got != tc.want {
 				t.Errorf("ValidUSSSN(%q) = %v, want %v", tc.v, got, tc.want)
 			}
@@ -89,7 +91,8 @@ func TestValidURL(t *testing.T) {
 		{"", false},
 		{"   ", false},
 	}
-	for _, tc := range cases {		t.Run(tc.v, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.v, func(t *testing.T) {
 			if got := ValidURL(tc.v); got != tc.want {
 				t.Errorf("ValidURL(%q) = %v, want %v", tc.v, got, tc.want)
 			}
@@ -118,10 +121,11 @@ func TestValidCreditCard(t *testing.T) {
 		{"4242424242424241", false},
 		{"1234567890123456", false},
 		// 长度错
-		{"123456789012", false},  // 12 位
+		{"123456789012", false},         // 12 位
 		{"12345678901234567890", false}, // 20 位
 	}
-	for _, tc := range cases {		t.Run(tc.v, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.v, func(t *testing.T) {
 			if got := ValidCreditCard(tc.v); got != tc.want {
 				t.Errorf("ValidCreditCard(%q) = %v, want %v", tc.v, got, tc.want)
 			}

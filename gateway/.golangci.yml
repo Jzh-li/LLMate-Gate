@@ -18,7 +18,22 @@ linters:
     - unconvert
     - copyloopvar
 
+# 格式门禁。v2 里 gofmt/goimports 属于 formatters，**不在 linters 下** ——
+# 不显式声明就完全不跑。这一点踩过一次：2026-09-12 的「清零全部告警」提交
+# 在删 `tc := tc` 冗余拷贝时把 4 处换行弄丢了（`for … {` 与 `t.Run(…)` 被一个
+# 字面 TAB 粘在同一行），同一提交却写着「本地 golangci-lint v2 复跑：0 issues」。
+# 那句话是真的 —— 配置里没有格式检查，所以它看不见自己留下的痕。
+# 该残渣存活 11 天、跨 4 个提交、每轮 CI 全绿都没人看见（Specs/06 #30）。
+formatters:
+  enable:
+    - gofmt
+
 issues:
   # 单文件单 linter 上限放宽，避免大文件被截断后漏报
   max-issues-per-linter: 50
   max-same-issues: 10
+  # uniq-by-line 保持默认 true（同一行只留一条 issue）。实测过一次它的影响面：
+  # 一行既不合格式、又被别的 linter 命中时，只会显示后者 —— 例如未导出函数
+  # 同时触发 unused(4:6) 与 gofmt(4:1)，默认只报 unused；设成 false 才两条都出。
+  # 这是**可用性**差异而非盲区：文件照样进不了门禁，`gofmt -w` 一次全修完。
+  # 所以不改为 false（会平白增加输出噪声），只需知道「修完 lint 可能还会冒出格式问题」。

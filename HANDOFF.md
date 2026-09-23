@@ -987,5 +987,39 @@ TestBuildJudgment_ThresholdsAreKeyedByBackendName
 | `e2e/e2e.sh` | **PASS=21 FAIL=0** |
 | `e2e/security.sh` | **PASS=32 FAIL=0** |
 | `e2e/ui_smoke.sh` | **PASS=11 FAIL=0** |
-| `gofmt -l cmd/ internal/ pkg/` | 仅 `pkg/global/*.go` 为**既有**未格式化文件（本次未触碰，CI 无 gofmt 门禁） |
+| `gofmt -l .` | 干净（首轮跑时曾报 5 个文件 —— 见下条 #30） |
+
+### 再补一件：格式一致性零门禁（`Specs/06` #30）
+
+上面那行 `gofmt` 的备注本身就是一条线索 —— 追下去发现「本机有 5 个文件不合 gofmt、
+CI 全绿」的原因是 **`.golangci.yml` 里没有 `formatters` 段**。golangci-lint v2 把
+gofmt/goimports 移到了顶层 `formatters`，**不在 `linters` 下**，不显式声明就完全不跑。
+
+5 个文件是三种性质，处置不同：
+
+| 类别 | 文件 | 性质 |
+|---|---|---|
+| **A. 真实格式缺陷** | `pkg/global/global_test.go`（4 处） | `for … {` 与 `t.Run(…)` 之间被一个**字面 TAB** 粘在同一行 |
+| B. 文件尾缺换行 | `debug/hub.go`、`pkg/global/global.go` | 卫生 |
+| C. Go 1.19 前的 doc-comment 排版 | `debug/handler.go`、`debug/store.go` | 工具链年代差异，非作者失误 |
+
+A 类追到 `c35dbe8`（2026-09-12）—— 一个标题为**「chore(lint): 引入 golangci-lint
+保守规则集并清零全部 11+8 处告警」**的提交，在删 `tc := tc` 冗余拷贝时弄丢了换行，
+同一提交还写着「本地 golangci-lint v2 复跑：0 issues」。**那句话是真的**，
+因为配置里没有格式检查。残渣存活 **11 天 / 跨 4 个提交 / 每轮 CI 全绿**。
+
+修法：全仓 `gofmt -w`（48 行是 C 类注释重排，零语义）+ `.golangci.yml` 加
+`formatters: enable: [gofmt]` + 同步 CI 里那条「逐条枚举规则集」的注释。
+
+> **门禁类改动必须做「注入违规 → 确认被拦 → 还原」的对照组。**
+> 第一次实验给出的是 `0 issues` —— **假绿**。追下去有两层原因：先是缓存（换冷缓存
+> 才看见文件被 `unused` 报出来），再是 **`issues.uniq-by-line`（默认 true）按行去重**
+> （`unused` 在 4:6、`gofmt` 在 4:1，同一行只留一条）。把函数改成导出名消掉 `unused`
+> 后，`gofmt` 立刻报出来，机制才算钉死。
+> 若就此收工，交付的会是一个「看着配好了、实际不报」的门禁 —— 即又一个 #26。
+> **`uniq-by-line` 保持默认**：它是可用性差异不是盲区（文件照样进不了门禁），
+> 这条实测定论已写进 `.golangci.yml` 注释。
+
+**这一条与 #26 / #29 是同一族**，只是前两次是「配置项没人读」，这次是
+「文件属性没人看」——共同形状都是**没有读取方 / 没有门禁的约束，等于不存在**。
 

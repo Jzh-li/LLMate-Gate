@@ -1,14 +1,15 @@
 // Package debug 实现内嵌调试面板：HTTP/WS 路由、流量事件广播、Playground（契约 §10 / UI设计 §0-4）。
 //
 // 设计原则：
-//   1. 非阻塞 + recover 保护：Publish 永远不影响主代理流程（UI设计 §1.3）。
-//   2. 环形缓冲：默认 200 条（可配），超出丢弃最旧（UI设计 §1.2 store.go）。
-//   3. 127.0.0.1 绑定：默认仅本机访问（UI设计 §4.1 / 契约 §10.1）。
-//   4. --no-debug 关闭后所有 debug 端点 404（UI设计 §5.1 D5）。
+//  1. 非阻塞 + recover 保护：Publish 永远不影响主代理流程（UI设计 §1.3）。
+//  2. 环形缓冲：默认 200 条（可配），超出丢弃最旧（UI设计 §1.2 store.go）。
+//  3. 127.0.0.1 绑定：默认仅本机访问（UI设计 §4.1 / 契约 §10.1）。
+//  4. --no-debug 关闭后所有 debug 端点 404（UI设计 §5.1 D5）。
 //
 // 调用关系：
-//   pipeline.Processor (Publisher) ──► Hub ──► WS subscribers
-//                                  └► Store ──► GET /_api/traffic
+//
+//	pipeline.Processor (Publisher) ──► Hub ──► WS subscribers
+//	                               └► Store ──► GET /_api/traffic
 package debug
 
 import (

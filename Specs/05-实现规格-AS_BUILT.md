@@ -1,6 +1,6 @@
 # LLMate Gate 实现规格（AS-BUILT）
 
-> **文档版本**：v1.7（2026-09-23）
+> **文档版本**：v1.8（2026-09-23）
 > **层级**：L2-AsBuilt（实现现状规格）
 > **取证基线**：`origin/main @ ca63991`（v1.0 取证于 `c64f246`，其后历版为 `0a21dfa` → `ca63991`；
 > v1.1 增补第 6 批缺陷修复；
@@ -11,7 +11,8 @@
 > v1.6 新增 §15 判断层（Judge）实现，修正 §6.2 `tool_call_scan` 的错误陈述并新增 §6.2.1，
 > §7.2 指标 16 → 19；
 > v1.7 §15.5 补「阈值表的键 = 后端自报名」不变量（`Specs/06` #29）；§12.2 记本机
-> golangci-lint 已就位（此前 lint 类问题只能靠 CI 反馈））
+> golangci-lint 已就位（此前 lint 类问题只能靠 CI 反馈）；
+> v1.8 §12.2 记格式门禁已补（`Specs/06` #30：`formatters` 未声明 ⇒ 格式一致性零门禁））
 > **取证方法**：全量 `git log`（92 commit）+ 逐包读源码 + 本机实际编译运行验证。
 > **核心规则**：**本文档以代码为唯一事实来源。** 任何与 `HANDOFF.md` / `Specs/00` 冲突之处，以本文档为准；本文档与代码冲突时，以代码为准并回来更新本文档。
 > **不回答的问题**：为什么这样设计（见 `Specs/00`）、原始排期（见 `Specs/01`）。
@@ -869,7 +870,8 @@ python3 bench_runner_adversarial.py --endpoint http://127.0.0.1:8413/v1/privacy/
 | P2-14 | SSE 帧外的不完整哨兵字节不计入 orphan | ⏸ **已接受** | `SSERestorer` 只解析 `data:` 行，被切在帧边界之外的裸字节不进入 trie 缓冲，因此不计数。这是**刻意选择**：帧外的字节本就不该做还原（不是 JSON 值），计入反而产生噪声告警。保留观察，不修 |
 | — | `go test -race` 在本容器不可用 | 环境限制 | `FATAL: ThreadSanitizer: unsupported VMA range (Found 39 - Supported 48)`，非代码问题。本机以 `go test ./...` + `go vet ./...` 替代；CI 的 `verify` job 覆盖 `-race`。**代价是竞态缺陷只能靠 CI 反馈**，故 CI 的失败必须自述（见 §9.1 与 Specs/06 B-19） |
 | — | `pii-engineer` sidecar 为 mock | 能力缺口 | 客户端已就绪，无真实 NER 服务 |
-| — | ~~本机没有 golangci-lint~~ | ✅ 已解决 | 此前 lint 类问题**只能靠 CI 反馈**（`unused` 一次、`QF1001` 一次）。现已在本机装上 CI 同版本（v2.6.1，`/home/jzhli/.gotmp/golangci-lint-2.6.1-linux-arm64/`），**推之前先跑**：`HOME=/home/jzhli XDG_CACHE_HOME=/home/jzhli/.cache <bin> run --timeout 5m --config .golangci.yml`。两个坑：解包要 `tar --no-same-owner`（release tarball 的 uid/gid 本机不存在），运行时必须给 `HOME`/`XDG_CACHE_HOME`（否则去 `mkdir /root/.cache` 被拒）。详见 `HANDOFF.md` §16 收口段 |
+| — | ~~本机没有 golangci-lint~~ | ✅ 已解决 | 此前 lint 类问题**只能靠 CI 反馈**（`unused` 一次、`QF1001` 一次）。现已在本机装上 CI 同版本（v2.6.1，`/home/jzhli/.gotmp/golangci-lint-2.6.1-linux-arm64/`），**推之前先跑**：`HOME=/home/jzhli XDG_CACHE_HOME=/home/jzhli/.cache <bin> run --timeout 5m --config .golangci.yml`。两个坑：解包要 `tar --no-same-owner`（release tarball 的 uid/gid 本机不存在），运行时必须给 `HOME`/`XDG_CACHE_HOME`（否则去 `mkdir /root/.cache` 被拒）；且 `go` 要走绝对路径（PATH 里那个是 1.15.9）。详见 `HANDOFF.md` §16 收口段 |
+| — | ~~格式一致性零门禁~~ | ✅ 已解决（`Specs/06` #30） | `.golangci.yml` 缺 `formatters` 段 —— v2 里 gofmt/goimports **不在 `linters` 下**，不显式声明就完全不跑。已加 `formatters: enable: [gofmt]` 并全仓 `gofmt -w`。**注意 `issues.uniq-by-line`（默认 true）按行去重**：一行既不合格式又被别的 linter 命中时只显示后者，属可用性差异而非盲区 |
 
 ### 12.3 已声明的能力边界（**非缺陷**）
 

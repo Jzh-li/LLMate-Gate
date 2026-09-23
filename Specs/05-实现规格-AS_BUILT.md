@@ -1,6 +1,6 @@
 # LLMate Gate 实现规格（AS-BUILT）
 
-> **文档版本**：v1.13（2026-09-23）
+> **文档版本**：v1.14（2026-09-23）
 > **层级**：L2-AsBuilt（实现现状规格）
 > **取证基线**：`origin/main @ ca63991`（v1.0 取证于 `c64f246`，其后历版为 `0a21dfa` → `ca63991`；
 > v1.1 增补第 6 批缺陷修复；
@@ -26,6 +26,9 @@
 > v1.13 §12.1 记审计事件族的「字段存在 ≠ 字段可用」（`Specs/06` #35）：三个契约声明的
 > 字段从不被写入，且既有对齐结论 A17 的判据只核到「字段在不在结构体里」；
 > 另 `Specs/03` 声明的 27 个测试中 2 个不存在（均在审计侧）—— **本轮仍只做文档侧**
+> v1.14 §12.1 记端点**方法门禁**的不一致（`Specs/06` #36）：契约声明方法列的 **10 个端点里
+> 只有 2 个**真的限制方法（实测 `/healthz` 的 `POST`/`PUT`/`DELETE` 全 200），
+> 且 `405` 是 `http.Error` 的纯文本、无错误码 —— 已作为**第二个显式例外**写进契约 §0.3
 > **取证方法**：全量 `git log`（92 commit）+ 逐包读源码 + 本机实际编译运行验证。
 > **核心规则**：**本文档以代码为唯一事实来源。** 任何与 `HANDOFF.md` / `Specs/00` 冲突之处，以本文档为准；本文档与代码冲突时，以代码为准并回来更新本文档。
 > **不回答的问题**：为什么这样设计（见 `Specs/00`）、原始排期（见 `Specs/01`）。
@@ -892,6 +895,7 @@ python3 bench_runner_adversarial.py --endpoint http://127.0.0.1:8413/v1/privacy/
 | **#33** | **README 承诺 10 个环境变量，9 个在代码里零出现** —— 含安全开关 `FAIL_CLOSED` 与隐私开关 `STREAMING_RESTORE`，且与 hooks 里**真实**的 `LMGATE_HOOK_FAIL_CLOSED` 名字撞车；另性能基准表的测量口径端点写成了不存在的 `/_api/privacy/redact` | 🟡 中 | ✅ 已修（2026-09-23，四轮）：假表换成**真实 env 清单**（5 个变量 + `${VAR}` 占位符机制）+ 修正口径端点为 `/v1/privacy/redact` |
 | **#34** | **错误码族：契约指名的出口是死代码 + 面板自造码** —— `errors.HTTPStatus` / `Response` / `Body` / `ErrorPayload` 全仓 **0 调用**，实际生效的是 `proxy.statusForCode` + `writeError`（**重复实现**，两份对 `invalid_config` 结论已分歧 400 / 500）；`server.wrap` 的 panic 响应发 HTTP 500 却写 502 类的 `upstream_error`；`gateway/debug` **自造 6 个错误码**；契约 §0.3 自身过期（**9 码 vs 实现 11 码**）且「其余 500」与同文档 §7.3 明写的 `404 not_found` **自相矛盾**；3 个哨兵全仓 0 引用 | 🟡 中 | ⏸ **文档侧已修**（2026-09-23，五轮）：`Specs/02` §0.3 对齐 **11** 个码 + 改为逐码映射表 + 登记三处已知偏差 + 明确**面板私有码豁免**（拍板：保留但标注为面板私有，不纳入契约承诺）。**代码一行未动**，代码侧 4 条见 §12.2 |
 | **#35** | **审计事件族：字段「存在」被当成了「可用」** —— 契约 §9.1 声明的 3 个字段**从不被写入**：`client_id`（全仓无来源）、`detector_latency_ms`（恒为 `0`，而耗时数据其实已在 `llmate_detect_latency_seconds` 指标里）、`sample_text`（`log_pii` 只管 `detected_entities[].value`，与本字段无关）。`audit.Event` **全仓只有一处构造点**，而 `recordAudit` **签名里就不接收**这三个值。**既有对齐结论 A17 的判据只核到「字段在不在结构体里」**，故一路「完全对齐」至今。另：`Specs/03` 声明的 27 个测试中 **2 个不存在**（均在审计侧），且其中一个的判据本身是**恒真的空转断言** | 🟡 中 | ⏸ **文档侧已修**（2026-09-23，六轮）：`Specs/02` §9.1/§9.2 就地标注三个字段「当前不写入」+ 澄清 `log_pii` 真实作用范围（v1.2 → v1.3）；`README` 审计样例的 `detector_latency_ms` 由 `3` 改为真实的 `0` 并加注；`Specs/03` 标注 2 个缺失测试且指明判据须改；`SPEC_ALIGNMENT.md` A17 修正判据 + 新增 §6 复核修正。**代码一行未动**，代码侧 2 条见 §12.2 |
+| **#36** | **端点方法门禁不一致 + `405` 不在错误模型里** —— 实测契约 §4 声明的 **10 个端点里只有 2 个**真的限制方法：`/v1/privacy/{redact,restore}` 回 `405`，而 `/healthz`（`POST`/`PUT`/`DELETE` 全 **200**，响应体与 GET 一致）、`/metrics`、`/v1/models`、`/v1/{chat/completions,completions,embeddings,responses,messages}` **一处门禁都没有**。方法门禁在 `proxy/privacy.go`（2 处）与 `debug/handler.go`（7 处）各写一份，`internal/server` 主路由 **0 处**。另：`405` 由 `http.Error` 产出（`text/plain` + `method not allowed`，**无错误码**），违反 `errors.go:3`，且 §0.3 的 11 个码里没有对应项、全仓文档此前零处提及 | 🟡 中 | ⏸ **文档侧已修**（2026-09-23，七轮）：`Specs/02` §4 补「方法列的实际门禁情况」表 + 正确读法；§0.3 把 `405` 声明为**第二个显式例外**（附保留理由 + 调用方按 `Content-Type` 分流）；附录 A 改为「两处例外」（v1.3 → v1.4）。**代码一行未动**，代码侧 3 条见 §12.2。**不是安全漏洞**（错误方法只是到达 proxy，仍被上游拒），真问题是契约不准确 + 同一规则三份实现 |
 
 ### 12.2 未修 / 明确不做
 
@@ -912,6 +916,9 @@ python3 bench_runner_adversarial.py --endpoint http://127.0.0.1:8413/v1/privacy/
 | — | `gateway/debug` 的 6 个自造错误码 | ✅ **明确不做**（`Specs/06` #34-J） | 2026-09-23 拍板：**保留为面板私有**，不纳入契约承诺。已在 `Specs/02` §0.3 与附录 A 显式豁免（面板 loopback-only、`--no-debug` 后整组路径不注册）。理由：面板是本地调试面，为其新增常量会把契约面扩大到一个不承诺稳定的路径上 |
 | — | 审计事件的 3 个「当前不写入」字段：`client_id` / `detector_latency_ms` / `sample_text` | ✅ **明确不做**（`Specs/06` #35-N/O/P） | 2026-09-23 拍板：**三个字段一律标注「当前不生效」** —— 字段留在结构体与契约里（不删），但在契约、README、代码注释三处如实标注。理由：与 #31 同口径 —— 先消灭「无声承诺」，**实现与否是独立决定**，不顺手在审计轮里做。注意 `detector_latency_ms` 的接法成本最低（耗时已在检测路径里，只是没传进 `recordAudit` 的签名），将来想接随时可接 |
 | — | `Specs/03` 声明的 2 个审计测试不存在 | ⏸ **待定**（`Specs/06` #35-S） | `TestAudit_NoPIIByDefault` / `TestAudit_Export_PIP` 全仓无。补第一个时**必须改判据**：原写「不含 `sample_text`」，而该字段永远不含 ⇒ 是恒真的空转测试；应改为断言 `detected_entities[].value` 在 `log_pii=false` 时缺席（那才是 `log_pii` 真正控制的字段）。见 `Specs/03` §1 就地标注 |
+| — | 主路由零方法门禁（`/healthz`、`/metrics`、`/v1/*`） | ⏸ **待定**（`Specs/06` #36-T/U） | 实测 `POST`/`PUT`/`DELETE /healthz` 全部 `200` 且响应体与 GET 一致；`GET /v1/chat/completions` 仍到达 proxy。修法：给主路由套一层「方法白名单」中间件（按契约 §4 的方法列），或在每个 handler 开头加 `r.Method != http.MethodPost` 判断（与 `privacy.go:120` 同写法）。**属对外行为变更**：错误方法将从 `200`/`502` 变为 `405`，需同步 `e2e` 断言并跑全部门禁。本轮按拍板只标注 |
+| — | `405` 是 `http.Error` 的纯文本、无错误码 | ✅ **明确不做**（`Specs/06` #36-V/W） | 2026-09-23 拍板：**保留现值，作为契约 §0.3 的第二个显式例外**。理由：405 表达的是「这个方法本身不被接受」，与「请求内容有问题」（`invalid_request`）不是一类；硬塞进错误码表会让客户端误以为换 body 就能重试成功。已在 §0.3 写明范围、理由与调用方的分流方式（按 `Content-Type` 判断），不新增常量、不改 `writeError` |
+| — | 方法门禁三份实现（`privacy.go` 2 处 / `debug/handler.go` 7 处 / 主路由 0 处） | ⏸ **待定**（`Specs/06` #36-U） | 同一规则多份手写实现，与 #34 的「两份错误映射」同形。修法：抽一个 `requireMethod(w, r, http.MethodPost) bool` 辅助函数（或 `methodMiddleware`），三处共用。**注意**：`debug` 的 405 带 `Allow` 头而 `privacy` 的不带（实测）—— 合一后应统一是否输出 `Allow` |
 
 ### 12.3 已声明的能力边界（**非缺陷**）
 

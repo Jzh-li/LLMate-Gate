@@ -1,6 +1,6 @@
 # LLMate Gate 实现规格（AS-BUILT）
 
-> **文档版本**：v1.12（2026-09-23）
+> **文档版本**：v1.13（2026-09-23）
 > **层级**：L2-AsBuilt（实现现状规格）
 > **取证基线**：`origin/main @ ca63991`（v1.0 取证于 `c64f246`，其后历版为 `0a21dfa` → `ca63991`；
 > v1.1 增补第 6 批缺陷修复；
@@ -23,6 +23,9 @@
 > v1.12 §12.1 记错误码族的真源与自造码（`Specs/06` #34）：契约指名的映射函数全仓零调用、
 > 与生效实现已分歧，面板自造 6 个码 —— **本轮按拍板只做文档侧**（`Specs/02` §0.3 对齐
 > 11 个码 + 登记三处偏差 + 面板私有码豁免）；代码侧 5 条见 §12.2）
+> v1.13 §12.1 记审计事件族的「字段存在 ≠ 字段可用」（`Specs/06` #35）：三个契约声明的
+> 字段从不被写入，且既有对齐结论 A17 的判据只核到「字段在不在结构体里」；
+> 另 `Specs/03` 声明的 27 个测试中 2 个不存在（均在审计侧）—— **本轮仍只做文档侧**
 > **取证方法**：全量 `git log`（92 commit）+ 逐包读源码 + 本机实际编译运行验证。
 > **核心规则**：**本文档以代码为唯一事实来源。** 任何与 `HANDOFF.md` / `Specs/00` 冲突之处，以本文档为准；本文档与代码冲突时，以代码为准并回来更新本文档。
 > **不回答的问题**：为什么这样设计（见 `Specs/00`）、原始排期（见 `Specs/01`）。
@@ -124,7 +127,7 @@ proxy.forward → 选上游（openai/anthropic）→ 改写鉴权头 → 发请�
   ├─ fullResponse：整体还原
   └─ streamResponse：SSERestorer（trie 缓冲，跨事件边界还原）
   ▼
-recordAudit（20 字段）→ /metrics 计数 → publish(restore.done)
+recordAudit（17 顶层字段 + 3 内嵌）→ /metrics 计数 → publish(restore.done)
   ▼
 客户端
 ```
@@ -563,19 +566,25 @@ Anthropic 的 `tool_use.input` 结构不同（在 `content` 列表里嵌 dict，
 
 ## 7. 可观测性
 
-### 7.1 审计事件（`audit.Event`，20 字段）
+### 7.1 审计事件（`audit.Event`：17 个顶层字段 + `detected_entities[]` 内嵌 3 个）
 
-`log_pii: false`（默认）时不记原文。JSON Lines 一行一条，同时进内存环（最近 200 条）供 `/_api/audit` 查询。
+`log_pii: false`（默认）时不记原文 —— **该开关的作用面只有 `detected_entities[].value` 一处**
+（见 §12.1 #35）。JSON Lines 一行一条，同时进内存环（最近 200 条）供 `/_api/audit` 查询。
 
 ```
-timestamp / schema_version / request_id / conversation_id / client_id
+timestamp / schema_version / request_id / conversation_id / client_id ⚠️
 upstream / model
 detected_entities[{type, score, value?}] / replaced_count
 strategy / restored / streaming
-latency_ms / detector_latency_ms
+latency_ms / detector_latency_ms ⚠️
 outcome / error_code
-sample_text
+sample_text ⚠️
 ```
+
+> ⚠️ **三个字段当前从不被写入**（`Specs/06` #35）：`client_id`（无来源）/
+> `detector_latency_ms`（恒为 `0`）/ `sample_text`（与 `log_pii` 无关）。
+> `audit.Event` 全仓只有一处构造点，而 `recordAudit` 的签名里就不接收这三个值 ——
+> 即**不是漏填，是没有输入**。`schema_version` 由 `Logger.Write` 兜底填充，正常。
 
 `Export: ["pip", "gdpr"]` 声明合规导出目标。
 
@@ -882,6 +891,7 @@ python3 bench_runner_adversarial.py --endpoint http://127.0.0.1:8413/v1/privacy/
 | **#32** | **文档/help 给出的命令与实现不符** —— README「从源码构建」两条命令都跑不通（`--upstream` 这个 flag 不存在、`configs/config.yaml` 这个文件不存在），同名标题还出现两节 | 🟡 中 | ⏸ 文档侧已修（2026-09-23，`66bf806`）：补 `cp config.example.yaml config.yaml` 一步、删掉错位的重复节、加「上游只能写在配置文件里」说明。**代码侧 3 条见 §12.2** |
 | **#33** | **README 承诺 10 个环境变量，9 个在代码里零出现** —— 含安全开关 `FAIL_CLOSED` 与隐私开关 `STREAMING_RESTORE`，且与 hooks 里**真实**的 `LMGATE_HOOK_FAIL_CLOSED` 名字撞车；另性能基准表的测量口径端点写成了不存在的 `/_api/privacy/redact` | 🟡 中 | ✅ 已修（2026-09-23，四轮）：假表换成**真实 env 清单**（5 个变量 + `${VAR}` 占位符机制）+ 修正口径端点为 `/v1/privacy/redact` |
 | **#34** | **错误码族：契约指名的出口是死代码 + 面板自造码** —— `errors.HTTPStatus` / `Response` / `Body` / `ErrorPayload` 全仓 **0 调用**，实际生效的是 `proxy.statusForCode` + `writeError`（**重复实现**，两份对 `invalid_config` 结论已分歧 400 / 500）；`server.wrap` 的 panic 响应发 HTTP 500 却写 502 类的 `upstream_error`；`gateway/debug` **自造 6 个错误码**；契约 §0.3 自身过期（**9 码 vs 实现 11 码**）且「其余 500」与同文档 §7.3 明写的 `404 not_found` **自相矛盾**；3 个哨兵全仓 0 引用 | 🟡 中 | ⏸ **文档侧已修**（2026-09-23，五轮）：`Specs/02` §0.3 对齐 **11** 个码 + 改为逐码映射表 + 登记三处已知偏差 + 明确**面板私有码豁免**（拍板：保留但标注为面板私有，不纳入契约承诺）。**代码一行未动**，代码侧 4 条见 §12.2 |
+| **#35** | **审计事件族：字段「存在」被当成了「可用」** —— 契约 §9.1 声明的 3 个字段**从不被写入**：`client_id`（全仓无来源）、`detector_latency_ms`（恒为 `0`，而耗时数据其实已在 `llmate_detect_latency_seconds` 指标里）、`sample_text`（`log_pii` 只管 `detected_entities[].value`，与本字段无关）。`audit.Event` **全仓只有一处构造点**，而 `recordAudit` **签名里就不接收**这三个值。**既有对齐结论 A17 的判据只核到「字段在不在结构体里」**，故一路「完全对齐」至今。另：`Specs/03` 声明的 27 个测试中 **2 个不存在**（均在审计侧），且其中一个的判据本身是**恒真的空转断言** | 🟡 中 | ⏸ **文档侧已修**（2026-09-23，六轮）：`Specs/02` §9.1/§9.2 就地标注三个字段「当前不写入」+ 澄清 `log_pii` 真实作用范围（v1.2 → v1.3）；`README` 审计样例的 `detector_latency_ms` 由 `3` 改为真实的 `0` 并加注；`Specs/03` 标注 2 个缺失测试且指明判据须改；`SPEC_ALIGNMENT.md` A17 修正判据 + 新增 §6 复核修正。**代码一行未动**，代码侧 2 条见 §12.2 |
 
 ### 12.2 未修 / 明确不做
 
@@ -900,6 +910,8 @@ python3 bench_runner_adversarial.py --endpoint http://127.0.0.1:8413/v1/privacy/
 | — | 3 个错误哨兵零引用 | ⏸ **待定**（`Specs/06` #34-L） | `ErrDetectorTimeout` / `ErrDetectorUnavailable` / `ErrCircuitOpen` 全仓 **0 引用（含测试）**，注释却称「便于测试与 `errors.Is` 判定」；`ErrNotFound` 有 8 处真在用。修法：删掉，或补 `errors.Is` 断言使其名副其实 |
 | — | `debug` 面板错误响应形状不一 | ⏸ **待定**（`Specs/06` #34-M） | `gateway/debug/handler.go` 同一文件内既用 `writeErr`(JSON) 又用 `http.Error`(text/plain)。本轮拍板「面板私有码保留、只做标注」，故形状统一也一并留待 |
 | — | `gateway/debug` 的 6 个自造错误码 | ✅ **明确不做**（`Specs/06` #34-J） | 2026-09-23 拍板：**保留为面板私有**，不纳入契约承诺。已在 `Specs/02` §0.3 与附录 A 显式豁免（面板 loopback-only、`--no-debug` 后整组路径不注册）。理由：面板是本地调试面，为其新增常量会把契约面扩大到一个不承诺稳定的路径上 |
+| — | 审计事件的 3 个「当前不写入」字段：`client_id` / `detector_latency_ms` / `sample_text` | ✅ **明确不做**（`Specs/06` #35-N/O/P） | 2026-09-23 拍板：**三个字段一律标注「当前不生效」** —— 字段留在结构体与契约里（不删），但在契约、README、代码注释三处如实标注。理由：与 #31 同口径 —— 先消灭「无声承诺」，**实现与否是独立决定**，不顺手在审计轮里做。注意 `detector_latency_ms` 的接法成本最低（耗时已在检测路径里，只是没传进 `recordAudit` 的签名），将来想接随时可接 |
+| — | `Specs/03` 声明的 2 个审计测试不存在 | ⏸ **待定**（`Specs/06` #35-S） | `TestAudit_NoPIIByDefault` / `TestAudit_Export_PIP` 全仓无。补第一个时**必须改判据**：原写「不含 `sample_text`」，而该字段永远不含 ⇒ 是恒真的空转测试；应改为断言 `detected_entities[].value` 在 `log_pii=false` 时缺席（那才是 `log_pii` 真正控制的字段）。见 `Specs/03` §1 就地标注 |
 
 ### 12.3 已声明的能力边界（**非缺陷**）
 

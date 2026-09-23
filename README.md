@@ -642,10 +642,17 @@ LLMate Gate 的审计日志是结构化的，每条记录包含：
   "restored": true,
   "streaming": false,
   "latency_ms": 212,
-  "detector_latency_ms": 3,
+  "detector_latency_ms": 0,
   "outcome": "success"
 }
 ```
+
+> ⚠️ **`detector_latency_ms` 目前恒为 `0`** —— 它是每条记录都有的字段，但没有任何写入方
+> （检测耗时只在 Prometheus 指标 `llmate_detect_latency_seconds` 里，没传进审计）。
+> 上面这个 `0` 就是真实输出：**不要**把它读成「检测耗时为 0」。
+> 同理 `client_id` / `sample_text` 两个字段**从不写入**（`client_id` 无来源，
+> `sample_text` 与 `log_pii` 无关）。完整说明见
+> `Specs/02-接口与数据契约规范.md` §9.1 与 `Specs/06` #35。
 
 > 字段名以 `Specs/02-接口与数据契约规范.md` §9.1 与 `gateway/internal/audit/audit.go` 为准（旧示例里的 `entity_types` / `replacement_strategy` 已废弃）。
 

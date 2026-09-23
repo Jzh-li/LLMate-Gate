@@ -942,14 +942,26 @@ cd /home/jzhli/.gotmp && curl -sSL -o gl.tar.gz \
   https://github.com/golangci/golangci-lint/releases/download/v2.6.1/golangci-lint-2.6.1-linux-arm64.tar.gz
 tar xzf gl.tar.gz --no-same-owner
 
-# 跑（必须给 HOME/XDG_CACHE_HOME，否则它去 mkdir /root/.cache 被拒）
+# 跑。HOME / XDG_CACHE_HOME / TMPDIR 三个都必须给（原因见下方「三个本机坑」）
 cd /home/jzhli/LLMate-Gate/gateway && HOME=/home/jzhli XDG_CACHE_HOME=/home/jzhli/.cache \
-  /home/jzhli/.gotmp/golangci-lint-2.6.1-linux-arm64/golangci-lint \
-  run --timeout 5m --config .golangci.yml
+  TMPDIR=/home/jzhli/.gotmp PATH=/home/jzhli/.gotoolchain/go/bin:$PATH \
+  /home/jzhli/go/bin/golangci-lint run --timeout 5m --config .golangci.yml
 ```
 
-⇒ **以后推之前先跑这一条**。两个本机坑记一下：`tar` 要 `--no-same-owner`；
-golangci-lint 要 `HOME`/`XDG_CACHE_HOME`。
+⇒ **以后推之前先跑这一条**。三个本机坑记一下：
+
+1. `tar` 要 `--no-same-owner`（解包那一步）；
+2. golangci-lint 要 `HOME` / `XDG_CACHE_HOME`；
+3. **还要 `TMPDIR`** —— 它做 typecheck 时会在 `$TMPDIR` 下写 `importcfg`，而本机
+   `/tmp` 是 **10MB tmpfs**（见上文环境表）。漏了它一律失败，现象是
+   `write /tmp/go-build…/importcfg: no space left on device` 或
+   `mapping output file failed: no space left on device` —— **看起来像磁盘满，
+   其实 `/` 还有 15G、`/home` 还有 332G**。
+
+   > 2026-09-23 实测：只给 `HOME` + `XDG_CACHE_HOME` → `1 issues: * typecheck`（假红）；
+   > 补上 `TMPDIR` → `0 issues`。`go build` / `go test` 同理，同一份环境变量
+   > 一次 `export` 出去即可复用。（二进制本机有两份同版本：`/home/jzhli/go/bin/golangci-lint`
+   > 与 `/home/jzhli/.gotmp/golangci-lint-2.6.1-linux-arm64/golangci-lint`。）
 
 **（3）给「唯一没有测试的接缝」补测试，结果当场挖出 #29**
 

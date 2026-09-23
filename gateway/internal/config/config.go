@@ -28,6 +28,7 @@ type Config struct {
 	Policy      PolicyConfig      `yaml:"policy"`
 	Vault       VaultConfig       `yaml:"vault"`
 	Audit       AuditConfig       `yaml:"audit"`
+	Judgment    JudgmentConfig    `yaml:"judgment"`
 }
 
 // GatewayConfig 网关监听与上游配置。
@@ -121,8 +122,8 @@ type CacheConfig struct {
 
 // ReplacementConfig 替换策略配置。
 type ReplacementConfig struct {
-	Strategy    string            `yaml:"strategy"`
-	SimulateZH  SimulateZHConfig  `yaml:"simulate_zh"`
+	Strategy     string           `yaml:"strategy"`
+	SimulateZH   SimulateZHConfig `yaml:"simulate_zh"`
 	Irreversible []string         `yaml:"irreversible"`
 	// PerTypeFate 逐类型命运覆盖：entity_type -> reversible|mask|redact（Phase 2 阶段 2）。
 	PerTypeFate map[string]string `yaml:"per_type_fate"`
@@ -144,9 +145,26 @@ type SimulateZHConfig struct {
 }
 
 // PolicyConfig 安全策略。
+//
+// 三个字段里只有 FailClosed 是真的开关（`main.go` 读它构造 processor）。
+// 另外两个是**历史遗留的假开关**：被定义了、被写进默认配置 / 示例 YAML /
+// Specs，但代码里从没有任何一处读它们，对应行为始终无条件执行。
+// 也就是说 `tool_call_scan: false` 与 `stream_restore: false` 过去都是
+// 一句无声的谎话。收尾见 validateAlwaysOn：不删键（删了会让已发布配置在
+// 严格解析下拒绝启动），但把合法取值收窄成 true，写 false 在启动期报错。
 type PolicyConfig struct {
-	FailClosed    bool `yaml:"fail_closed"`
-	ToolCallScan  bool `yaml:"tool_call_scan"`
+	FailClosed bool `yaml:"fail_closed"`
+	// ToolCallScan 只能为真。它声称控制的「对 tool_calls 参数的递归扫描」
+	// （transform / anonymizeJSONString）无条件执行。
+	//
+	// 不给它真开关的理由：tool_calls 的 arguments 承载命令、路径、文件名和
+	// 模型自造的字面量，是整份请求里 PII 密度最高、也最容易被外发的位置。
+	ToolCallScan bool `yaml:"tool_call_scan"`
+	// StreamRestore 只能为真。它声称控制的「SSE trie 缓冲还原」同样无条件
+	// 执行（proxy 侧一律用 pipeline.StreamRestorer 造还原器）。
+	//
+	// 不给它真开关的理由：不还原，客户端拿到的是 <<zh_phone_1>> 而不是真实值，
+	// 用户自己的应用当场就坏了——这是正确性问题，不是可选项。
 	StreamRestore bool `yaml:"stream_restore"`
 }
 
@@ -222,6 +240,14 @@ func Default() *Config {
 			Persist:       false,
 		},
 		Audit: AuditConfig{Enabled: true, Path: "./audit.log", Export: []string{"pip", "gdpr"}, LogPII: false, MaxSizeMB: 100, MaxBackups: 3},
+		// 判断层默认关闭：新增一个「能拦请求」的组件，默认姿态必须是「不生效」。
+		// 打开它需要显式配 enabled + backends + points，三者缺一就是空转配置。
+		Judgment: JudgmentConfig{
+			Enabled:    false,
+			Mode:       "shadow",
+			FailClosed: true,
+			Timeout:    DefaultJudgmentTimeout,
+		},
 	}
 }
 
@@ -261,6 +287,10 @@ func expandEnvDeep(c *Config) {
 	c.Detection.Sidecar.Endpoint = expandEnv(c.Detection.Sidecar.Endpoint)
 	c.Detection.Sidecar.Command = expandEnv(c.Detection.Sidecar.Command)
 	c.Detection.Registry.Path = expandEnv(c.Detection.Registry.Path)
+	for i := range c.Judgment.Backends {
+		c.Judgment.Backends[i].BaseURL = expandEnv(c.Judgment.Backends[i].BaseURL)
+		c.Judgment.Backends[i].Model = expandEnv(c.Judgment.Backends[i].Model)
+	}
 }
 
 // backtickRe 匹配 yaml.v3 错误消息里回显的值片段。
@@ -355,6 +385,25 @@ func (c *Config) expandIdentityCard() error {
 	return nil
 }
 
+// validateAlwaysOn 校验一个「历史遗留的假开关」：键存在于已发布的配置里、
+// 但代码从未读它，对应行为始终无条件执行，因此合法取值只有 true（或缺省）。
+//
+// 为什么是报错而不是静默忽略：这类键最坏的地方不是它没用，而是它**看起来有用**。
+// 运维把 tool_call_scan 改成 false，会以为自己关掉了某个扫描，实际上什么都没
+// 发生；日志、指标、配置摘要全都显示不出这件事。同 mode: enforce 的处理一致——
+// 空转的配置项比没有更危险。
+//
+// 为什么不是直接删字段：Load 用严格解析（KnownFields），删了会让所有已发布的、
+// 带这一行的配置在升级后拒绝启动。改个空转字段不值得付这个代价。
+func validateAlwaysOn(key string, v bool) error {
+	if v {
+		return nil
+	}
+	return gatewayerrors.Errorf(gatewayerrors.CodeInvalidConfig,
+		"policy.%s is always on and cannot be disabled; "+
+			"remove the key (it defaults to true) or set it to true", key)
+}
+
 // Validate 启动期一次性校验（契约 §3.3）。失败即退出，不做降级。
 func (c *Config) Validate() error {
 	if strings.TrimSpace(c.Gateway.Upstream) == "" {
@@ -401,6 +450,14 @@ func (c *Config) Validate() error {
 	}
 	if c.Detection.Cache.TTL > 0 && c.Detection.Cache.TTL < time.Minute {
 		return gatewayerrors.New(gatewayerrors.CodeInvalidConfig, "detection.cache.ttl must be >= 1m")
+	}
+	// policy 下的两个「假开关」——它们从来没被代码读过，行为始终无条件执行。
+	// 详见 PolicyConfig 的注释：这里把合法取值收窄成 true，谎话变成一道闸。
+	if err := validateAlwaysOn("tool_call_scan", c.Policy.ToolCallScan); err != nil {
+		return err
+	}
+	if err := validateAlwaysOn("stream_restore", c.Policy.StreamRestore); err != nil {
+		return err
 	}
 	// 登记表必须有落盘位置：面板里加的值若不落盘，重启就静默消失，
 	// 而用户会以为已经登记好了。
@@ -451,6 +508,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Detection.Cache.MaxEntries <= 0 {
 		c.Detection.Cache.MaxEntries = 10000
+	}
+	if err := c.Judgment.Validate(); err != nil {
+		return err
 	}
 	return nil
 }

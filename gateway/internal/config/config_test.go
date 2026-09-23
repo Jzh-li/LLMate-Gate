@@ -54,6 +54,47 @@ func TestConfig_Default(t *testing.T) {
 	require.False(t, c.Audit.LogPII, "审计默认不含原文")
 }
 
+// TestConfig_LegacyAlwaysOnKeys policy 下的两个假开关（tool_call_scan /
+// stream_restore）从来没被代码读过，行为无条件执行。合法取值只有 true 或缺省；
+// 写 false 必须在启动期报错，而不是静默生效成「什么都没发生」。
+func TestConfig_LegacyAlwaysOnKeys(t *testing.T) {
+	const head = `
+gateway:
+  listen: ":8400"
+  upstream: "https://api.openai.com"
+policy:
+`
+	// 缺省：Default() 已经把两个键置 true，policy 段整段省略也必须能启动。
+	t.Run("缺省可启动", func(t *testing.T) {
+		c, err := Load(writeConfig(t, head+"  fail_closed: true\n"))
+		require.NoError(t, err)
+		require.True(t, c.Policy.ToolCallScan)
+		require.True(t, c.Policy.StreamRestore)
+	})
+
+	// 显式写 true 是现存所有配置、示例 YAML 与 e2e 配置的形态，必须继续可用。
+	t.Run("显式true仍合法", func(t *testing.T) {
+		_, err := Load(writeConfig(t, head+"  tool_call_scan: true\n  stream_restore: true\n"))
+		require.NoError(t, err)
+	})
+
+	// 写 false 报错，且错误里要点名是哪个键 —— 用户得知道该删哪一行。
+	for _, key := range []string{"tool_call_scan", "stream_restore"} {
+		t.Run("拒绝关闭_"+key, func(t *testing.T) {
+			_, err := Load(writeConfig(t, head+"  "+key+": false\n"))
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "policy."+key+" is always on")
+			// 错误要给出可执行的下一步，否则用户只会知道「不行」。
+			require.Contains(t, err.Error(), "remove the key")
+		})
+	}
+
+	// 直接单测 helper：true 放行、false 报错。上面的 Load 路径依赖
+	// Default() 的初值，这一层不依赖，钉住的是函数本身的语义。
+	require.NoError(t, validateAlwaysOn("tool_call_scan", true))
+	require.Error(t, validateAlwaysOn("tool_call_scan", false))
+}
+
 // TestConfig_MissingUpstream 必填缺失 → invalid_config（测试规约 §1.3）。
 func TestConfig_MissingUpstream(t *testing.T) {
 	p := writeConfig(t, `

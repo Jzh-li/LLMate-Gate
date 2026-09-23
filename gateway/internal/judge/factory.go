@@ -25,7 +25,7 @@ func NewFromSpecs(specs []Spec, opts EvaluatorOptions) (*Evaluator, error) {
 		var b Judge
 		switch sp.Kind {
 		case KindRules:
-			b = NewRules(opts.Whitelist)
+			b = NewNamedRules(sp.Name, opts.Whitelist)
 		case KindOpenAI:
 			b = NewOpenAICompat(OpenAIOptions{
 				Name: sp.Name, BaseURL: sp.BaseURL, Model: sp.Model,
@@ -40,6 +40,16 @@ func NewFromSpecs(specs []Spec, opts EvaluatorOptions) (*Evaluator, error) {
 		default:
 			return nil, fmt.Errorf("judge: unknown backend kind %q (want rules|openai|http)", sp.Kind)
 		}
+		// 名字必须与 Spec 一致，这里不等就直接拒绝装配。
+		//
+		// 阈值表是按**后端盖在证据上的名字**（Evidence.Engine）登记的，不是按配置里
+		// 的名字。两者一旦不等，Mapper 查不到专属条目、静默退回内置缺省——用户改的
+		// 阈值毫无效果，而且没有任何报错。这类「配置空转」必须在装配期炸掉：它是静默的，
+		// 靠使用者自己发现不了。
+		if got := b.Name(); got != sp.Name {
+			return nil, fmt.Errorf("judge: backends[%d] is named %q but its spec says %q; "+
+				"a backend's own name keys its threshold table, so the two must match", i, got, sp.Name)
+		}
 		backends = append(backends, b)
 	}
 
@@ -48,12 +58,14 @@ func NewFromSpecs(specs []Spec, opts EvaluatorOptions) (*Evaluator, error) {
 		return nil, err
 	}
 	// per-backend 阈值 + confidence 语义：两者都随后端走，不能共用一套。
+	// 键用 backends[i].Name()（而非 sp.Name）——它与上面的一致性检查配合，
+	// 把「键 = 后端自报名」这条不变量摆在调用点上。
 	for i, sp := range specs {
 		th := types.DefaultThresholds()
 		if sp.Thresholds != nil {
 			th = *sp.Thresholds
 		}
-		e.SetMapper(sp.Name, th, backends[i].Capabilities().GivesConfidence)
+		e.SetMapper(backends[i].Name(), th, backends[i].Capabilities().GivesConfidence)
 	}
 	return e, nil
 }

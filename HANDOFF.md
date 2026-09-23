@@ -910,3 +910,82 @@ git diff -w --numstat -- gateway/internal/{replacer,vault,detector,cache}
 | 思考流不接 | `thinking`/`reasoning` 是不透明块且下一轮常不回传 |
 | 数字不可外推 | 探针与样例集的成绩衡量的是**自带规则后端**在**我们自己写的样本**上，不是「判断层有多准」 |
 
+### 收口（同日稍后）：CI 唯一红灯 + 顺带挖出的第二处缺陷
+
+**（1）CI 唯一失败项是 lint，已修并本地复现**
+
+`fe48d82` 推上去后 CI 为 `failure`，逐 job 比对后**唯一**失败的是 `golangci-lint`：
+
+```
+gateway/internal/judge/argv.go:189  QF1001: could apply De Morgan's law (staticcheck)
+```
+
+匿名 GitHub API 拿不到 job 日志（`403 Must have admin rights`），改用 **check-run
+annotations** 端点（`/commits/<sha>/check-runs` → `/check-runs/<id>/annotations`）
+拿到了确切文件与行号。其余 10 个 job（`bench perf guard` / `e2e & ui smoke` /
+`vet & unit test` / `bench gate` / `coverage` / `build binaries` / `bench fixtures` /
+`govulncheck` / `vscode-ext typecheck`）全绿 —— **perf 门禁在 CI 上确认无回退**，
+补上了本机跑不出的那一项。
+
+修法不是把 `!(a || b)` 改写成 `(!a && !b)`，而是抽出具名谓词
+（`isIdentChar(r)` + `if !isIdentChar(r)`）：既满足 QF1001，也比原写法可读，
+并顺带写清了「刻意不用 `unicode.IsLetter`」的理由。
+
+**（2）本机装上了 CI 同版本的 golangci-lint**
+
+这件事之前一直缺，导致 lint 类问题**只能靠 CI 反馈**（§15 末尾记过一次 `unused`，
+这次是 `QF1001`）。现在：
+
+```bash
+# 一次性安装（注意 --no-same-owner：release tarball 里的 uid/gid 在本机不存在）
+cd /home/jzhli/.gotmp && curl -sSL -o gl.tar.gz \
+  https://github.com/golangci/golangci-lint/releases/download/v2.6.1/golangci-lint-2.6.1-linux-arm64.tar.gz
+tar xzf gl.tar.gz --no-same-owner
+
+# 跑（必须给 HOME/XDG_CACHE_HOME，否则它去 mkdir /root/.cache 被拒）
+cd /home/jzhli/LLMate-Gate/gateway && HOME=/home/jzhli XDG_CACHE_HOME=/home/jzhli/.cache \
+  /home/jzhli/.gotmp/golangci-lint-2.6.1-linux-arm64/golangci-lint \
+  run --timeout 5m --config .golangci.yml
+```
+
+⇒ **以后推之前先跑这一条**。两个本机坑记一下：`tar` 要 `--no-same-owner`；
+golangci-lint 要 `HOME`/`XDG_CACHE_HOME`。
+
+**（3）给「唯一没有测试的接缝」补测试，结果当场挖出 #29**
+
+`cmd/llmate-gate/main.go:457` 的 `buildJudgment`（config → `judge.Spec` 投影）
+是 config 层与 judge 层之间**唯一**的接缝，且它既不属 config 的测试范围、也不属
+judge 的测试范围 —— **两侧都测不到**。补测试时按「先写断言、再看行为」的做法，
+9 组断言里**恰好红了 1 组**：
+
+```
+TestBuildJudgment_ThresholdsAreKeyedByBackendName
+  expected: "allow"    actual: "review"
+```
+
+红的正是「后端名」那一组，其余全绿 —— 这个形状直接把根因锁到名字上，而不是让
+「是不是阈值算法有问题」变成一个开放问题。根因：`Rules.Name()` 写死 `"rules"`，
+而 `SetMapper` 用配置名登记、`mapperFor(ev.Engine)` 用自报名查表；两者不等时
+**配置里的阈值被静默丢弃**，退回内置缺省。详见 `Specs/06` #29。
+
+修法两条：让规则后端认识自己的名字（`NewNamedRules`，`NewRules` 保留为缺省名
+便捷构造，既有调用点零改动）；把「键 = 后端自报名」做成**装配期不变量**
+（`NewFromSpecs` 里名字不等即拒绝装配），并让 `SetMapper` 直接用
+`backends[i].Name()` 作键。
+
+> 这是本项目**第三次**遇到同族问题（`vault.persist`、`policy.tool_call_scan`，
+> 现加 #29），共同形状是「**写进去的值没有任何读取方**」。三次的修法也一致：
+> 要么在装配期炸掉，要么把不变量做成结构性的 —— 不留「已知限制」。
+
+### 收口后的验证（本机实跑，全部通过）
+
+| 项 | 结果 |
+|---|---|
+| `go build ./...` / `go vet ./...` | 干净 |
+| `go test ./...` | **26 个包全 ok**，0 FAIL |
+| `golangci-lint v2.6.1 --config .golangci.yml` | **`0 issues`**（CI 同版本，含 QF 类检查） |
+| `e2e/e2e.sh` | **PASS=21 FAIL=0** |
+| `e2e/security.sh` | **PASS=32 FAIL=0** |
+| `e2e/ui_smoke.sh` | **PASS=11 FAIL=0** |
+| `gofmt -l cmd/ internal/ pkg/` | 仅 `pkg/global/*.go` 为**既有**未格式化文件（本次未触碰，CI 无 gofmt 门禁） |
+

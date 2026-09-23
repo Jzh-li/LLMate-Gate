@@ -58,6 +58,9 @@ func IsKnownKind(k Kind) bool {
 // 于是本包不依赖 config，测试可以只用 Spec 构造任意后端。
 type Spec struct {
 	// Name 后端名（进 Evidence.Engine 与指标标签，必须唯一且非空）。
+	//
+	// ⚠️ 这个名字会成为该后端**阈值表的键**：Mapper 是按 Evidence.Engine 查表的，
+	// 所以构造出的后端必须原样自报此名（NewFromSpecs 会校验，不等即拒绝装配）。
 	Name string
 	// Kind 后端类型。
 	Kind Kind

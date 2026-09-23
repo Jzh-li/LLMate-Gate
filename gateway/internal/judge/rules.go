@@ -20,15 +20,31 @@ import (
 // 因此本文件刻意不做任何「语义猜测」。判不了就返回 unknown（交给人或链上下一个
 // 后端），而不是给一个看起来合理的低 severity——后者会让「自信地错」变成常态。
 type Rules struct {
+	name      string
 	whitelist Whitelist
 }
 
-// NewRules 构造规则后端。白名单在此也查一遍：Evaluator 层的短路是为了省一次
-// 调用，但直接使用 Rules（测试、/v1/judge 端点）时白名单不能失效。
-func NewRules(wl Whitelist) *Rules { return &Rules{whitelist: wl} }
+// DefaultRulesName 规则后端的缺省名。配置里给后端起别名（name: policy）时会覆盖它。
+const DefaultRulesName = "rules"
 
-// Name 后端名。进 Evidence.Engine 与指标标签。
-func (r *Rules) Name() string { return "rules" }
+// NewRules 构造缺省命名的规则后端。白名单在此也查一遍：Evaluator 层的短路是为了省一次
+// 调用，但直接使用 Rules（测试、/v1/judge 端点）时白名单不能失效。
+func NewRules(wl Whitelist) *Rules { return NewNamedRules(DefaultRulesName, wl) }
+
+// NewNamedRules 构造指定名字的规则后端。
+//
+// 名字必须可指定，否则配置里的 `name` 对规则后端就是个死字段，而这种死字段的
+// 害处不止「标签不好看」：Name() 同时是**阈值表的键**（见 factory.go 的说明），
+// 写死的名字会让配置里的阈值静默失效。空名按缺省名处理。
+func NewNamedRules(name string, wl Whitelist) *Rules {
+	if name == "" {
+		name = DefaultRulesName
+	}
+	return &Rules{name: name, whitelist: wl}
+}
+
+// Name 后端名。进 Evidence.Engine 与指标标签，同时也是该后端阈值表的键。
+func (r *Rules) Name() string { return r.name }
 
 // Capabilities 规则后端的自述。
 //

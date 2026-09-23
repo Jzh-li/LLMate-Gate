@@ -1,6 +1,6 @@
 # LLMate Gate 实现规格（AS-BUILT）
 
-> **文档版本**：v1.6（2026-09-23）
+> **文档版本**：v1.7（2026-09-23）
 > **层级**：L2-AsBuilt（实现现状规格）
 > **取证基线**：`origin/main @ 0a21dfa`（v1.0 取证于 `c64f246`；v1.1 增补第 6 批缺陷修复；
 > v1.2 增补 §9.1 的 `bench-gate` 守门与子模块锚点约定；
@@ -8,7 +8,9 @@
 > v1.4 增补 §9.1 的 job 级联依赖说明；
 > v1.5 增补 §9.1 的门禁解耦 —— `needs` 只表达产物依赖；
 > v1.6 新增 §15 判断层（Judge）实现，修正 §6.2 `tool_call_scan` 的错误陈述并新增 §6.2.1，
-> §7.2 指标 16 → 19）
+> §7.2 指标 16 → 19；
+> v1.7 §15.5 补「阈值表的键 = 后端自报名」不变量（`Specs/06` #29）；§12.2 记本机
+> golangci-lint 已就位（此前 lint 类问题只能靠 CI 反馈））
 > **取证方法**：全量 `git log`（92 commit）+ 逐包读源码 + 本机实际编译运行验证。
 > **核心规则**：**本文档以代码为唯一事实来源。** 任何与 `HANDOFF.md` / `Specs/00` 冲突之处，以本文档为准；本文档与代码冲突时，以代码为准并回来更新本文档。
 > **不回答的问题**：为什么这样设计（见 `Specs/00`）、原始排期（见 `Specs/01`）。
@@ -866,6 +868,7 @@ python3 bench_runner_adversarial.py --endpoint http://127.0.0.1:8413/v1/privacy/
 | P2-14 | SSE 帧外的不完整哨兵字节不计入 orphan | ⏸ **已接受** | `SSERestorer` 只解析 `data:` 行，被切在帧边界之外的裸字节不进入 trie 缓冲，因此不计数。这是**刻意选择**：帧外的字节本就不该做还原（不是 JSON 值），计入反而产生噪声告警。保留观察，不修 |
 | — | `go test -race` 在本容器不可用 | 环境限制 | `FATAL: ThreadSanitizer: unsupported VMA range (Found 39 - Supported 48)`，非代码问题。本机以 `go test ./...` + `go vet ./...` 替代；CI 的 `verify` job 覆盖 `-race`。**代价是竞态缺陷只能靠 CI 反馈**，故 CI 的失败必须自述（见 §9.1 与 Specs/06 B-19） |
 | — | `pii-engineer` sidecar 为 mock | 能力缺口 | 客户端已就绪，无真实 NER 服务 |
+| — | ~~本机没有 golangci-lint~~ | ✅ 已解决 | 此前 lint 类问题**只能靠 CI 反馈**（`unused` 一次、`QF1001` 一次）。现已在本机装上 CI 同版本（v2.6.1，`/home/jzhli/.gotmp/golangci-lint-2.6.1-linux-arm64/`），**推之前先跑**：`HOME=/home/jzhli XDG_CACHE_HOME=/home/jzhli/.cache <bin> run --timeout 5m --config .golangci.yml`。两个坑：解包要 `tar --no-same-owner`（release tarball 的 uid/gid 本机不存在），运行时必须给 `HOME`/`XDG_CACHE_HOME`（否则去 `mkdir /root/.cache` 被拒）。详见 `HANDOFF.md` §16 收口段 |
 
 ### 12.3 已声明的能力边界（**非缺陷**）
 
@@ -999,6 +1002,25 @@ score = Severity × (GivesConfidence ? Confidence : 1)
 `benign` **不做特例**：它照样走 `score = severity`。理由是 `benign` + 高 severity 是个自相矛盾但可能出现的输出，给它开后门会让矛盾被静默放行。
 
 **阈值是 per-backend 的**（`Evaluator.SetMapper` 逐个设置）。理由是可实测的：confidence 跨后端不可比——同一个模型在不同语种/任务上会给出「准确率 0.000 而置信度 95.2%」这种组合，用一张表会把它的高置信低危结论放行了。
+
+**阈值表的键 = 后端自报名（`Evidence.Engine`），不是配置里的名字。** 这条是被一次真实缺陷钉住的
+（`Specs/06` #29）：`Rules.Name()` 曾写死 `"rules"`，而 `SetMapper` 用**配置名**登记、
+`mapperFor(ev.Engine)` 用**自报名**查表 —— `name: policy` + `kind: rules` 这个组合下
+查不到条目，静默退回 `DefaultThresholds()`，**用户调的阈值一个都不生效且没有任何报错**。
+
+现在由两处共同保证：
+
+| 位置 | 做法 |
+|---|---|
+| `NewFromSpecs` | 名字与 Spec 不符即**拒绝装配**（`backends[i] is named %q but its spec says %q`）——这是给未来新增 kind 用的防线 |
+| `SetMapper` 调用点 | 键直接写 `backends[i].Name()`，让不变量在调用点自明 |
+| `NewNamedRules` | 规则后端认识自己的名字；`NewRules` 保留为缺省名便捷构造（既有调用点零改动） |
+
+投影层（`cmd/llmate-gate/main.go` 的 `buildJudgment`）也有测试了：`cmd/llmate-gate/main_test.go`
+共 9 组，覆盖阈值三级继承（per-backend > 全局 > 内置，双向）、`fail_closed`、
+白名单两条短路、链顺序、`schema_mode` 5 种取值、`max_input_bytes`。
+**这个文件的存在理由**：`buildJudgment` 是 config 层与 judge 层之间唯一的接缝，
+且它既不属 config 的测试范围、也不属 judge 的测试范围 —— 两侧都测不到，只能在这里测。
 
 ### 15.6 观测位、接线与指标
 

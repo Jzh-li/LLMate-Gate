@@ -59,31 +59,15 @@ func TestRegexEngine_ShapeTolerance(t *testing.T) {
 // 归一化版本再扫」，这两类会静默退化（`2024-09-17` → `20240917` 就再也匹配不上）。
 // 所以 scan 必须保留原文那一遍，本用例守的就是这条。
 //
-// 两类用例的断言粒度不同，是刻意的：
-//   - date 只断言**类型被检出**。`reDate` 的日/月分支写成了「短优先」的交替
-//     （`(?:0?[1-9]|[12][0-9]|3[01])`），匹配 `2024-09-17` 时先命中 `1` 就收，
-//     实际报出的是 `2024-09-1`。这是**本轮之前就存在的缺陷**，与形态容忍无关，
-//     修它要动 reDate 并牵动合成语料的 F1=1.0 基线，故单独立项，不夹带在本轮。
-//     这里只断言「date 仍被检出」，避免把缺陷固化成期望值。
-//   - 其余用例断言**完整值**（它们的值本来就是完整的）。
+// 本用例只守「必须保留原文扫描」这一条性质。date 的跨度曾被截断，因而一度只能断言
+// 「类型被检出」；2026-09-23 修掉后恢复断言完整值，跨度另有 TestRegexEngine_DateSpan 守。
 func TestRegexEngine_ShapeToleranceKeepsSeparatorRules(t *testing.T) {
-	// wantType 非空时只断言该类型出现过。
-	typeCases := []struct{ name, text, wantType string }{
-		{"date 依赖连字符", "会议时间 2024-09-17，地点北京。", "date"},
-		{"date 依赖年月日", "签约时间 2024年9月17日 生效", "date"},
-	}
-	for _, tc := range typeCases {
-		got := detectSet(t, tc.text)
-		if !hasType(got, tc.wantType) {
-			t.Errorf("%s：未检出 %s 类型（原文 %q），实得 %v",
-				tc.name, tc.wantType, tc.text, keysOf(got))
-		}
-	}
-
 	cases := []struct {
 		name, text, want string
 		notWant          []string
 	}{
+		{"date 依赖连字符", "会议时间 2024-09-17，地点北京。", "date=2024-09-17", nil},
+		{"date 依赖年月日", "签约时间 2024年9月17日 生效", "date=2024年9月17日", nil},
 		{"us_ssn 依赖连字符", "Record SSN 123-45-6789 for the case.", "us_ssn=123-45-6789", nil},
 		{
 			"IP 不得被点分手机号规则吃掉", "服务器 192.168.1.100 已就绪",
@@ -101,6 +85,40 @@ func TestRegexEngine_ShapeToleranceKeepsSeparatorRules(t *testing.T) {
 					t.Errorf("%s：不应检出 %s（原文 %q）", tc.name, k, tc.text)
 				}
 			}
+		}
+	}
+}
+
+// TestRegexEngine_DateSpan 守住日期的跨度不被截断（2026-09-23 修复的回归闸门）。
+//
+// 缺陷形态：`reDate` 的日交替写成「短优先」（`(?:0?[1-9]|[12][0-9]|3[01])`），
+// 而日后面跟的是**可选**的 `日?`。Go regexp 取 leftmost-first，返回最先到达接受态
+// 的分支，于是日 ≥ 10 只报到第一位数字：`2024-09-17` → `2024-09-1`。
+// 脱敏只替换 span 内的字节，输出里就残留一个 `7`（`2024年12月31日` 残留 `1日`）。
+//
+// 判据不是「哪种写法好看」，而是**交替后面跟必需元素还是可选元素**：
+//   - 日后面是 `日?`（可选）→ 短优先必错，必须长优先；
+//   - 月后面是 `[-/.月]`（必需）→ 短优先也会因整体失败而回退纠偏，故保持原样。
+//
+// 所以本用例同时覆盖月与日取满，并特意保留「短分支恰好够用」的对照样本
+// （`2024-01-05` / `2024-09-1`）—— 只看双位日会以为长优先是唯一写法。
+func TestRegexEngine_DateSpan(t *testing.T) {
+	cases := []struct{ name, text, want string }{
+		{"hyphen 双位日", "会议时间 2024-09-17，地点北京。", "date=2024-09-17"},
+		{"hyphen 日 31", "签约于 2024-12-31 生效", "date=2024-12-31"},
+		{"hyphen 日 05（短分支恰好够用）", "生效日 2024-01-05 无异议", "date=2024-01-05"},
+		{"hyphen 单位日", "今天是 2024-09-1 星期天", "date=2024-09-1"},
+		{"斜杠", "归档 2024/09/17 完毕", "date=2024/09/17"},
+		{"点分", "记录 2024.09.17 完毕", "date=2024.09.17"},
+		{"中文年月日", "签署于 2024年9月17日 当天", "date=2024年9月17日"},
+		{"中文年月日 31", "截止 2024年12月31日 止", "date=2024年12月31日"},
+		{"20 世纪", "出生于 1999-11-30 上午", "date=1999-11-30"},
+		{"单月位", "生效 2024-9-17 起", "date=2024-9-17"},
+	}
+	for _, tc := range cases {
+		got := detectSet(t, tc.text)
+		if !got[tc.want] {
+			t.Errorf("%s：未检出 %s（原文 %q），实得 %v", tc.name, tc.want, tc.text, keysOf(got))
 		}
 	}
 }

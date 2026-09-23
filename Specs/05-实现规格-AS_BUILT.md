@@ -1,6 +1,6 @@
 # LLMate Gate 实现规格（AS-BUILT）
 
-> **文档版本**：v1.11（2026-09-23）
+> **文档版本**：v1.12（2026-09-23）
 > **层级**：L2-AsBuilt（实现现状规格）
 > **取证基线**：`origin/main @ ca63991`（v1.0 取证于 `c64f246`，其后历版为 `0a21dfa` → `ca63991`；
 > v1.1 增补第 6 批缺陷修复；
@@ -19,7 +19,10 @@
 > §12.2 增三条待定 —— 启动期错误不带 cause、usage 承诺的 `-V` 未注册、
 > 示例配置测试只硬编码单文件）；
 > v1.11 §12.1 记 README 的配置通道假承诺（`Specs/06` #33）：10 个环境变量中 9 个零实现，
-> 换成真实清单，并修正性能基准表的口径端点）
+> 换成真实清单，并修正性能基准表的口径端点；
+> v1.12 §12.1 记错误码族的真源与自造码（`Specs/06` #34）：契约指名的映射函数全仓零调用、
+> 与生效实现已分歧，面板自造 6 个码 —— **本轮按拍板只做文档侧**（`Specs/02` §0.3 对齐
+> 11 个码 + 登记三处偏差 + 面板私有码豁免）；代码侧 5 条见 §12.2）
 > **取证方法**：全量 `git log`（92 commit）+ 逐包读源码 + 本机实际编译运行验证。
 > **核心规则**：**本文档以代码为唯一事实来源。** 任何与 `HANDOFF.md` / `Specs/00` 冲突之处，以本文档为准；本文档与代码冲突时，以代码为准并回来更新本文档。
 > **不回答的问题**：为什么这样设计（见 `Specs/00`）、原始排期（见 `Specs/01`）。
@@ -878,6 +881,7 @@ python3 bench_runner_adversarial.py --endpoint http://127.0.0.1:8413/v1/privacy/
 | **#31** | **8 个「零读者 / 仅校验」配置键** —— `gateway.request_timeout`、`gateway.log_level`、`detection.fallback_regex`、`sidecar.{start_timeout,restart_limit,auto_start}`、`vault.key_derivation` 零读取方；`vault.encryption` 仅被校验、不被使用 | 🟡 中 | ✅ 已修（2026-09-23）：字段与示例配置逐条标注「尚未生效」；两个不可配的 vault 键**收窄成唯一合法值**（写别的启动期报错）+ 单测。**未改行为、未删除任何键**——实现与否留给后续决定，见 `Specs/06` #31 |
 | **#32** | **文档/help 给出的命令与实现不符** —— README「从源码构建」两条命令都跑不通（`--upstream` 这个 flag 不存在、`configs/config.yaml` 这个文件不存在），同名标题还出现两节 | 🟡 中 | ⏸ 文档侧已修（2026-09-23，`66bf806`）：补 `cp config.example.yaml config.yaml` 一步、删掉错位的重复节、加「上游只能写在配置文件里」说明。**代码侧 3 条见 §12.2** |
 | **#33** | **README 承诺 10 个环境变量，9 个在代码里零出现** —— 含安全开关 `FAIL_CLOSED` 与隐私开关 `STREAMING_RESTORE`，且与 hooks 里**真实**的 `LMGATE_HOOK_FAIL_CLOSED` 名字撞车；另性能基准表的测量口径端点写成了不存在的 `/_api/privacy/redact` | 🟡 中 | ✅ 已修（2026-09-23，四轮）：假表换成**真实 env 清单**（5 个变量 + `${VAR}` 占位符机制）+ 修正口径端点为 `/v1/privacy/redact` |
+| **#34** | **错误码族：契约指名的出口是死代码 + 面板自造码** —— `errors.HTTPStatus` / `Response` / `Body` / `ErrorPayload` 全仓 **0 调用**，实际生效的是 `proxy.statusForCode` + `writeError`（**重复实现**，两份对 `invalid_config` 结论已分歧 400 / 500）；`server.wrap` 的 panic 响应发 HTTP 500 却写 502 类的 `upstream_error`；`gateway/debug` **自造 6 个错误码**；契约 §0.3 自身过期（**9 码 vs 实现 11 码**）且「其余 500」与同文档 §7.3 明写的 `404 not_found` **自相矛盾**；3 个哨兵全仓 0 引用 | 🟡 中 | ⏸ **文档侧已修**（2026-09-23，五轮）：`Specs/02` §0.3 对齐 **11** 个码 + 改为逐码映射表 + 登记三处已知偏差 + 明确**面板私有码豁免**（拍板：保留但标注为面板私有，不纳入契约承诺）。**代码一行未动**，代码侧 4 条见 §12.2 |
 
 ### 12.2 未修 / 明确不做
 
@@ -891,6 +895,11 @@ python3 bench_runner_adversarial.py --endpoint http://127.0.0.1:8413/v1/privacy/
 | — | 启动期错误不带 cause（`Cause()` 全仓零调用） | ⏸ **待定**（`Specs/06` #32-E） | `errors.Error()` 有意不带 cause（「不对外暴露内部细节」），但日志侧也没有补 `Cause()` ⇒ 启动报 `config error: invalid_config: read config file`，看不出是路径写错、权限不足还是路径是个目录。修法：新增 `errors.LogString`（Code+Message 后附 cause），8 处 `log.Fatalf` 改用它，**不动 `Error()` 与 HTTP 响应**。2026-09-23 拍板本轮不做 |
 | — | usage 承诺的 `-V` 别名未注册 | ⏸ **待定**（`Specs/06` #32-A） | `cmd/llmate-gate/main.go:54` 的 help 文本写着 `(also -V)`，但只注册了 `version`；实测 `-V` 报 `flag provided but not defined: -V`（exit 2）—— 同一条 usage 输出里自相矛盾。修法：注册一行（Unix 惯例），或反向删掉那段文本 |
 | — | `TestExampleConfig_Loads` 只硬编码单个文件 | ⏸ **待定**（`Specs/06` #32-F） | 目前只测 `configs/config.example.yaml`；改为遍历 `configs/*.yaml` 后，以后新增的配置文件会自动进入门禁 |
+| — | 契约的映射函数零调用，与生效实现重复 | ⏸ **待定**（`Specs/06` #34-G/H） | `errors.HTTPStatus` / `Response` / `Body` / `ErrorPayload` 全仓 0 调用；生效的是 `proxy.statusForCode` + `writeError`。两份对 `invalid_config` 分歧（400 vs 500-default）。当前是 **latent** —— 该码只在 `config` 包启动期产生、不进 HTTP。修法二选一：① `proxy.statusForCode` 委托 `errors.HTTPStatus`（保留唯一真源）；② 删掉无人调用的 `Response`/`Body`/`ErrorPayload`。**同形态事故已发生过一次**：`Specs/06` #22（`c5a04ba`）当时只修了生效那份的 `CodeNotFound` 分支，契约那份没动 |
+| — | panic 响应的 `code` 与状态码不同源 | ⏸ **待定**（`Specs/06` #34-I） | `server.wrap` 的 recover 分支发 HTTP **500**，body 却写 `code: "upstream_error"`（契约 §0.3 = **502**）。修法：改成语义正确的码，或新增 `internal_error`。**属对外可观测行为变更**，故先只登记 |
+| — | 3 个错误哨兵零引用 | ⏸ **待定**（`Specs/06` #34-L） | `ErrDetectorTimeout` / `ErrDetectorUnavailable` / `ErrCircuitOpen` 全仓 **0 引用（含测试）**，注释却称「便于测试与 `errors.Is` 判定」；`ErrNotFound` 有 8 处真在用。修法：删掉，或补 `errors.Is` 断言使其名副其实 |
+| — | `debug` 面板错误响应形状不一 | ⏸ **待定**（`Specs/06` #34-M） | `gateway/debug/handler.go` 同一文件内既用 `writeErr`(JSON) 又用 `http.Error`(text/plain)。本轮拍板「面板私有码保留、只做标注」，故形状统一也一并留待 |
+| — | `gateway/debug` 的 6 个自造错误码 | ✅ **明确不做**（`Specs/06` #34-J） | 2026-09-23 拍板：**保留为面板私有**，不纳入契约承诺。已在 `Specs/02` §0.3 与附录 A 显式豁免（面板 loopback-only、`--no-debug` 后整组路径不注册）。理由：面板是本地调试面，为其新增常量会把契约面扩大到一个不承诺稳定的路径上 |
 
 ### 12.3 已声明的能力边界（**非缺陷**）
 

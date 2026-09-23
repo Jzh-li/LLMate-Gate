@@ -10,7 +10,7 @@
 
 | 项 | 状态 |
 |---|---|
-| **HEAD** | `95a4848`（reDate 日期跨度修复 + 文档 + lint 收口），工作树干净，**与 origin/main 同步** |
+| **HEAD** | 代码基线 `95a4848`（reDate 跨度修复 + lint 收口），该提交上 **11/11 全绿**；其后均为文档提交。工作树干净，与 `origin/main` 同步 |
 | **语料副本** | `bench/` 子模块本机为空目录；语料工作副本 = 独立克隆 `/home/jzhli/cn-pii-bench`，`dev` @ `b6779a7`（见 §3.2 第 6 坑） |
 | **仓可见性** | ✅ public（anonymous 可 clone） |
 | **Release** | ✅ `v0.1.0` 已发布：7 assets（6 平台 + SHA256SUMS） |

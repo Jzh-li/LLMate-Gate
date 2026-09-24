@@ -1,6 +1,7 @@
 // Package config 负责配置加载、${ENV} 展开与启动期一次性校验（契约 §3）。
 //
-// 校验失败一律退出（exit code 2），绝不进入降级服务状态。
+// 校验失败一律退出（**实测 exit code 1** —— 全仓走 log.Fatalf，固定 os.Exit(1)，
+// 无 os.Exit(2) 路径；契约 §3.3 曾声明 2，已在 2026-09-23 更正为实测值），绝不进入降级服务状态。
 package config
 
 import (
@@ -180,7 +181,7 @@ type PolicyConfig struct {
 	// 不给它真开关的理由：tool_calls 的 arguments 承载命令、路径、文件名和
 	// 模型自造的字面量，是整份请求里 PII 密度最高、也最容易被外发的位置。
 	ToolCallScan bool `yaml:"tool_call_scan"`
-	// StreamRestore 只能为真。它声称控制的「SSE trie 缓冲还原」同样无条件
+	// StreamRestore 只能为真。它声称控制的「SSE 哨兵缓冲还原」同样无条件
 	// 执行（proxy 侧一律用 pipeline.StreamRestorer 造还原器）。
 	//
 	// 不给它真开关的理由：不还原，客户端拿到的是 <<zh_phone_1>> 而不是真实值，

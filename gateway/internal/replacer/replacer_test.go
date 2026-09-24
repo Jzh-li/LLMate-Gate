@@ -114,8 +114,10 @@ func TestRestore_ByOffset(t *testing.T) {
 	require.Equal(t, "字面量 <<not_mapped_1>> 与 13800138000", out)
 }
 
-// TestStreamRestore_Trie SSE 分块跨块拼接占位符后完整还原（测试规约 §1.3）。
-func TestStreamRestore_Trie(t *testing.T) {
+// TestStreamRestore_Sentinel SSE 分块跨块拼接占位符后完整还原（测试规约 §1.3）。
+// 原名 TestStreamRestore_Trie：实现自 2026-09-09 起为 map 查表（非 trie），
+// 2026-09-24 随「文档里的死名词」审计一并改名（Specs/06 #41）。
+func TestStreamRestore_Sentinel(t *testing.T) {
 	entries := []types.MappingEntry{
 		{Placeholder: "<<zh_person_name_1>>", Original: []byte("张三"), EntityType: "zh_person_name", Fate: types.FateReversible},
 		{Placeholder: "<<zh_phone_1>>", Original: []byte("13800138000"), EntityType: "zh_phone", Fate: types.FateReversible},

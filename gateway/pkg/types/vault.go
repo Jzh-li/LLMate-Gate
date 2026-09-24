@@ -98,7 +98,7 @@ type MappingEntry struct {
 
 // Sentinel 返回该实体在上游侧可见的字符串：
 // simulate 模式下是仿真值，placeholder 模式下是占位符。
-// 响应还原时用它做 trie 匹配。
+// 响应还原时用它做哨兵匹配（replacer.StreamRestorer 的 map 查表，非 trie）。
 func (e *MappingEntry) Sentinel() string {
 	if len(e.FakeValue) > 0 {
 		return string(e.FakeValue)

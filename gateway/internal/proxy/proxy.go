@@ -1,7 +1,8 @@
 // Package proxy OpenAI 兼容反向代理 + 请求脱敏 + 响应还原（契约 §4）。
 //
 // 设计：server 只负责路由/鉴权/healthz/metrics；proxy 负责「脱敏请求体 → 转发上游
-// → 还原响应体」。还原走流式 trie（replacer.StreamRestorer），占位符跨 SSE 块拼接。
+// → 还原响应体」。还原走哨兵缓冲（replacer.StreamRestorer：map 查表 + 前缀判断，
+// 非 trie —— 2026-09-09 由 trie 重构而来），占位符跨 SSE 块拼接。
 package proxy
 
 import (

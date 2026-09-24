@@ -1,7 +1,12 @@
 # LLMate Gate 实现规格（AS-BUILT）
 
-> **文档版本**：v1.17（2026-09-23）
+> **文档版本**：v1.18（2026-09-24）
 > **层级**：L2-AsBuilt（实现现状规格）
+> **节号读法**：本文档与 `Specs/02`（契约）的小节号**大量重名且内容无关** ——
+> 例如 §5.3 本文档是「Vault」而契约是「流式还原」，§6.2 本文档是「tool_call 扫描」而契约是
+> 「仿真器」，§3.3 本文档是「身份卡」而契约是「CLI 校验退出码」。故下文凡写 `契约 §N.N`
+> 均指 `Specs/02-接口与数据契约规范.md` 的该节；**未加「契约」限定语的 `§N.N` 指本文档自身**
+> 的小节。不要跨文档顺号推测。
 > **取证基线**：`origin/main @ ca63991`（v1.0 取证于 `c64f246`，其后历版为 `0a21dfa` → `ca63991`；
 > v1.1 增补第 6 批缺陷修复；
 > v1.2 增补 §9.1 的 `bench-gate` 守门与子模块锚点约定；
@@ -45,6 +50,11 @@
 > `proxy.go:976` 名为 `redactLog` 的函数**只截断不脱敏**。另更正契约 §7.1 的 `Original` tag
 > （`json:"-"` → `json:"original"`，**必须序列化**，否则 `Seal`/`Unseal` 后无法还原）。
 > §12.2 记 3 条代码侧待定与「将来若动代码的首选修法」
+> v1.18 §12.1 记契约里的**实现描述与实跑不符**（`Specs/06` #40）：契约 §5.3 声明的「trie 缓冲」
+> 与 `trie *PlaceholderTrie` **从未存在**（2026-09-09 已改 map 查表）；契约 §6.2 贴的代码块
+> **张冠李戴**（文件/函数/方法三者皆非所述）；契约 §6.3 号段表 3 处不符；
+> 契约 §10.2 **漏了 `WSMessage.Timestamp` 与 `replaced` 事件**（对外协议缺口）。
+> **无代码侧功能待办** —— 缺陷全在文档侧（仅 4 处代码注释残留「trie」，纯注释，见 §12.2）
 > **取证方法**：全量 `git log`（92 commit）+ 逐包读源码 + 本机实际编译运行验证。
 > **核心规则**：**本文档以代码为唯一事实来源。** 任何与 `HANDOFF.md` / `Specs/00` 冲突之处，以本文档为准；本文档与代码冲突时，以代码为准并回来更新本文档。
 > **不回答的问题**：为什么这样设计（见 `Specs/00`）、原始排期（见 `Specs/01`）。
@@ -144,7 +154,7 @@ proxy.forward → 选上游（openai/anthropic）→ 改写鉴权头 → 发请�
   ▼
   响应（普通 or SSE）
   ├─ fullResponse：整体还原
-  └─ streamResponse：SSERestorer（trie 缓冲，跨事件边界还原）
+  └─ streamResponse：SSERestorer（哨兵缓冲，跨事件边界还原）
   ▼
 recordAudit（17 顶层字段 + 3 内嵌）→ /metrics 计数 → publish(restore.done)
   ▼
@@ -529,7 +539,7 @@ Merkle 的用途是**多轮对话只扫新增 turn**：请求体里 `messages` �
 
 ### 5.4 流式还原（SSE）
 
-`replacer.StreamRestorer`：trie 结构 + `isPrefixOfAny` 前缀判断。核心难点是**占位符可能被切开跨越 SSE 事件边界 / 跨越 TCP 分片**——还原器必须识别「当前缓冲是某个哨兵的前缀」并继续等待，而不是立即输出。
+`replacer.StreamRestorer`：**map 查表 + `isPrefixOfAny` 前缀判断**（**非 trie** —— 2026-09-09 起由 trie 重构为 map，见 `Specs/06` #40）。核心难点是**占位符可能被切开跨越 SSE 事件边界 / 跨越 TCP 分片**——还原器必须识别「当前缓冲是某个哨兵的前缀」并继续等待，而不是立即输出。
 
 `SSERestorer` 在其上再包一层：按 SSE 事件解析，只对 `data:` 行的 JSON 字符串值做还原，保留非 data 行、保留数字类型不动（`TestSSERestorer_PreservesNumbers` / `_NonTextKeysUntouched`）。
 
@@ -913,14 +923,15 @@ python3 bench_runner_adversarial.py --endpoint http://127.0.0.1:8413/v1/privacy/
 | **#35** | **审计事件族：字段「存在」被当成了「可用」** —— 契约 §9.1 声明的 3 个字段**从不被写入**：`client_id`（全仓无来源）、`detector_latency_ms`（恒为 `0`，而耗时数据其实已在 `llmate_detect_latency_seconds` 指标里）、`sample_text`（`log_pii` 只管 `detected_entities[].value`，与本字段无关）。`audit.Event` **全仓只有一处构造点**，而 `recordAudit` **签名里就不接收**这三个值。**既有对齐结论 A17 的判据只核到「字段在不在结构体里」**，故一路「完全对齐」至今。另：`Specs/03` 声明的 27 个测试中 **2 个不存在**（均在审计侧），且其中一个的判据本身是**恒真的空转断言** | 🟡 中 | ⏸ **文档侧已修**（2026-09-23，六轮）：`Specs/02` §9.1/§9.2 就地标注三个字段「当前不写入」+ 澄清 `log_pii` 真实作用范围（v1.2 → v1.3）；`README` 审计样例的 `detector_latency_ms` 由 `3` 改为真实的 `0` 并加注；`Specs/03` 标注 2 个缺失测试且指明判据须改；`SPEC_ALIGNMENT.md` A17 修正判据 + 新增 §6 复核修正。**代码一行未动**，代码侧 2 条见 §12.2 |
 | **#36** | **端点方法门禁不一致 + `405` 不在错误模型里** —— 实测契约 §4 声明的 **10 个端点里只有 2 个**真的限制方法：`/v1/privacy/{redact,restore}` 回 `405`，而 `/healthz`（`POST`/`PUT`/`DELETE` 全 **200**，响应体与 GET 一致）、`/metrics`、`/v1/models`、`/v1/{chat/completions,completions,embeddings,responses,messages}` **一处门禁都没有**。方法门禁在 `proxy/privacy.go`（2 处）与 `debug/handler.go`（7 处）各写一份，`internal/server` 主路由 **0 处**。另：`405` 由 `http.Error` 产出（`text/plain` + `method not allowed`，**无错误码**），违反 `errors.go:3`，且 §0.3 的 11 个码里没有对应项、全仓文档此前零处提及 | 🟡 中 | ⏸ **文档侧已修**（2026-09-23，七轮）：`Specs/02` §4 补「方法列的实际门禁情况」表 + 正确读法；§0.3 把 `405` 声明为**第二个显式例外**（附保留理由 + 调用方按 `Content-Type` 分流）；附录 A 改为「两处例外」（v1.3 → v1.4）。**代码一行未动**，代码侧 3 条见 §12.2。**不是安全漏洞**（错误方法只是到达 proxy，仍被上游拒），真问题是契约不准确 + 同一规则三份实现 |
 | **#37** | **契约 §1.1「权威包结构」仍漏 3 个包 + 一处依赖假声明** —— 用**集合差**核出 `internal/registry`（**实质模块**：用户自报 PII 的检测补召回层，有独立安全约定）、`pkg/cn`、`pkg/global` 三个包**完全未文档化**（前者的**端点** `/_api/registry` 早在 §10.1，属端点在此而包不在此）。**上一次补录（C21）的判据是「逐条回想」而非「对实际目录做集合差」**，故补了 6 个仍漏 3 个。另：`README` 称 `pkg/global` 与 `pkg/cn`「**解耦、不互相依赖**」，实测 `global.go:102` 的 `cn.LuhnValid` 是**单向依赖**（代码注释还明写「复用」） | 🟡 中 | ⏸ **文档侧已修**（2026-09-23，八轮）：`Specs/02` §1.1 二次补录 3 个包 + **把判据本身（`find`/`comm` 命令）写进文档** + 说明 `cmd/` 下 5 个非契约工具的范围；§1.2 补实测依赖方向与 `global → cn` 更正（v1.4 → v1.5）；`README` 同步更正；`SPEC_ALIGNMENT.md` §6 加 N2。**代码一行未动**（无代码侧待办 —— 缺陷全在文档侧） |
+| **#40** | **契约的实现描述与实跑不符（契约 §5.3 的 trie + §6.2/§6.3 代码 + §10.2 协议缺口）** —— ① 契约 §5.3 声明的「**trie 缓冲**」+ `trie *PlaceholderTrie` **从未存在**（2026-09-09 已改 map 查表、`trie.go` 被删），且其描述的触发方式（`<<` → `>>`）在 **simulate 策略下会漏还原**（仿真值无定界符）；② §6.2 贴的代码块**张冠李戴**：`internal/simulator/idcard.go` 不存在（实为 `identitycard.go`，只含 `ExpandIdentityCard`）、`idCardChecksum` 实际是 `pkg/cn.IDCardChecksum`（且 `len != 17` 返回 `0` 而非 panic）、`GenerateIDCard()` 不存在（真实入口是 §6.4 的 `Simulator.Fake`）；③ §6.3 号段表 **3 处差异**（无 154 / 有 167 / 无 194）；④ §10.2 **漏了 `WSMessage.Timestamp` 字段、`Data` 的 `omitempty`、以及 `replaced` 事件** —— 属**对外协议缺口**，前端按原契约实现会少收数据 | 🟡 中 | ⏸ **文档侧已修**（2026-09-24，十轮）；**无代码侧功能待办**（缺陷全在文档侧；4 处注释残留见 §12.2。契约**未**为此立「不抄实现」硬规则 —— 按拍板只记台账） |
 | **#39** | **面板事件流是明文通道，而服务端那道「防线」是假的** —— `log_pii`（默认 false）**只管落盘审计，对调试面板零影响**（双实例实跑逐字段比对：`false` 与 `true` 的面板记录**逐字相同**，而落盘审计的 `detected_entities[].value` 明显不同）。面板 `/_api/traffic` 与 `/ws/events` 每条记录带 **6 段明文**：`raw_request`（**整段用户原文**）、`replaced`（含 **base64 的 `original`**）、`restored`（还原后全文）、`upstream_response`、`detected[].value`、`mapping[].value`；前端只对后两者调 `maskValue`，**前 4 段走 `textContent` 原样渲染**（`app.js:200/201/226/227`）。根因：`proxy.go:976` 名为 **`redactLog` 的函数只做 4096 字节截断、不做脱敏**，却被 `redactLogIf(s, logPII)` 用在 3 处（另一处 `:159` 的 `rawRequest` 是**无条件**调用）。另：§7.1 契约写 `Original` 是 `json:"-"`「明文，不序列化」，实现是 `json:"original"` —— **这次实现对、契约错**（`vault.Seal` 就是 `json.Marshal` 再加密，原文必须进密文，否则 restore 全废），但该错会让读者以为此字段永不入 JSON 从而放松审查 | 🟡 中 | ⏸ **文档侧已修**（2026-09-23，十轮）：`Specs/02` §10.3 补**逐字段明文对照表**（含双实例实跑对照）、§9.2 写明「只管落盘审计、不管面板」、§10.4 补「默认 `debug:true`＝默认开启明文通道」的代价、§7.1 更正 `Original` tag 并说明为何必须序列化（v1.6 → v1.7）；`Specs/04` §4.3 补全打码范围、§3.3 补交叉引用（v1.0 → v1.1）。**代码一行未动**（拍板：与前九轮一致），代码侧 3 条见 §12.2 |
-| **#38** | **§0.4 超时约定与 §3.3 校验退出码：声明的数值与实跑对不上** —— ① §0.4 的「默认超时」清单**漏了判断层 300ms**；② **「Vault 加解密 100ms」全仓无实现**（`internal/vault` 无任何超时常量、无 `context.WithTimeout`）；③ 「超时**一律**转 `CodeDetectorTimeout`」**只有检测路径成立** —— 上游超时走 `CodeUpstreamError`（`proxy.go:628` 无条件包装），判断层超时走降级链（`ErrUnavailable`）；④ §3.3 的「失败则退出（**exit code 2**）」**实跑为 `1`**（枚举非法 / 必填显式为空两个模式都试了），`llmate-gate` 全仓无 `os.Exit(2)` 路径（`log.Fatalf` 固定 `os.Exit(1)`）；⑤ §3.3 的「必填缺失」措辞不准确 —— **不写 `gateway.upstream` 这个键 ≠ 该键为空**，`Default()` 填了 `https://api.openai.com`，实测不写即静默启动 | 🟡 中 | ⏸ **文档侧已修**（2026-09-23，九轮）：`Specs/02` §0.4 清单补第 4 项 + 逐项实现证据 + 「Vault 100ms」就地标注未实现（保留声明、写明理由）+ 超时→错误码**按路径不同的映射表**（并说明按字面实现会误导排查方向）+ 集合差命令写进文档；§3.3 退出码更正为实测 `1` 并登记能力缺口，「必填」改为「**显式为空**」（v1.5 → v1.6）。**代码一行未动**（含注释），代码侧 3 条见 §12.2 |
+| **#38** | **契约 §0.4 超时约定与 §3.3 校验退出码：声明的数值与实跑对不上** —— ① §0.4 的「默认超时」清单**漏了判断层 300ms**；② **「Vault 加解密 100ms」全仓无实现**（`internal/vault` 无任何超时常量、无 `context.WithTimeout`）；③ 「超时**一律**转 `CodeDetectorTimeout`」**只有检测路径成立** —— 上游超时走 `CodeUpstreamError`（`proxy.go:628` 无条件包装），判断层超时走降级链（`ErrUnavailable`）；④ §3.3 的「失败则退出（**exit code 2**）」**实跑为 `1`**（枚举非法 / 必填显式为空两个模式都试了），`llmate-gate` 全仓无 `os.Exit(2)` 路径（`log.Fatalf` 固定 `os.Exit(1)`）；⑤ §3.3 的「必填缺失」措辞不准确 —— **不写 `gateway.upstream` 这个键 ≠ 该键为空**，`Default()` 填了 `https://api.openai.com`，实测不写即静默启动 | 🟡 中 | ⏸ **文档侧已修**（2026-09-23，九轮）：`Specs/02` §0.4 清单补第 4 项 + 逐项实现证据 + 「Vault 100ms」就地标注未实现（保留声明、写明理由）+ 超时→错误码**按路径不同的映射表**（并说明按字面实现会误导排查方向）+ 集合差命令写进文档；§3.3 退出码更正为实测 `1` 并登记能力缺口，「必填」改为「**显式为空**」（v1.5 → v1.6）。**代码一行未动**（含注释），代码侧 3 条见 §12.2 |
 
 ### 12.2 未修 / 明确不做
 
 | # | 项 | 类型 | 说明 |
 |---|---|---|---|
-| P2-14 | SSE 帧外的不完整哨兵字节不计入 orphan | ⏸ **已接受** | `SSERestorer` 只解析 `data:` 行，被切在帧边界之外的裸字节不进入 trie 缓冲，因此不计数。这是**刻意选择**：帧外的字节本就不该做还原（不是 JSON 值），计入反而产生噪声告警。保留观察，不修 |
+| P2-14 | SSE 帧外的不完整哨兵字节不计入 orphan | ⏸ **已接受** | `SSERestorer` 只解析 `data:` 行，被切在帧边界之外的裸字节不进入哨兵缓冲，因此不计数。这是**刻意选择**：帧外的字节本就不该做还原（不是 JSON 值），计入反而产生噪声告警。保留观察，不修 |
 | — | `go test -race` 在本容器不可用 | 环境限制 | `FATAL: ThreadSanitizer: unsupported VMA range (Found 39 - Supported 48)`，非代码问题。本机以 `go test ./...` + `go vet ./...` 替代；CI 的 `verify` job 覆盖 `-race`。**代价是竞态缺陷只能靠 CI 反馈**，故 CI 的失败必须自述（见 §9.1 与 Specs/06 B-19） |
 | — | `pii-engineer` sidecar 为 mock | 能力缺口 | 客户端已就绪，无真实 NER 服务 |
 | — | ~~本机没有 golangci-lint~~ | ✅ 已解决 | 此前 lint 类问题**只能靠 CI 反馈**（`unused` 一次、`QF1001` 一次）。现已在本机装上 CI 同版本（v2.6.1，`/home/jzhli/.gotmp/golangci-lint-2.6.1-linux-arm64/`），**推之前先跑**：`HOME=/home/jzhli XDG_CACHE_HOME=/home/jzhli/.cache TMPDIR=/home/jzhli/.gotmp <bin> run --timeout 5m --config .golangci.yml`。三个坑：解包要 `tar --no-same-owner`（release tarball 的 uid/gid 本机不存在），运行时必须给 `HOME`/`XDG_CACHE_HOME`（否则去 `mkdir /root/.cache` 被拒），**且必须给 `TMPDIR`** —— `/tmp` 是 10MB tmpfs，漏了会报 `write /tmp/go-build…/importcfg: no space left on device`（看着像磁盘满，实际 `/home` 还有 332G）；且 `go` 要走绝对路径（PATH 里那个是 1.15.9）。详见 `HANDOFF.md` §16 收口段 |
@@ -945,6 +956,7 @@ python3 bench_runner_adversarial.py --endpoint http://127.0.0.1:8413/v1/privacy/
 | — | **面板事件流没有明文开关**（`log_pii` 对它零影响） | ⏸ **待定**（`Specs/06` #39） | **本轮拍板“只改文档”，代码侧不动**；已记录**将来若动代码的首选修法**：**新增面板专用开关**（暂拟 `debug.log_pii`，**默认 `false`**），关闭时不发布 `raw_request` / `replaced` / `restored` / `upstream_response`（或发布打码形态）。理由：这是**对外可观测行为变更** —— 默认关闭后面板详情页不再显示原文，须同步 `Specs/04` UI 文档与 e2e 断言；且它是**安全姿态的默认值**，不宜在文档轮里顺手改。等价备选：把 `redactLog` 真实实现（但会同时影响 `raw_request` 与 `upstream_response` 两处语义） |
 | — | `redactLog` 名不副实：只截断 4096 字节，不做脱敏 | ⏸ **待定**（`Specs/06` #39） | `proxy.go:976`。4 处调用：`:159` **无条件**（`rawRequest`）、`:674`/`:678`/`:753` 经 `redactLogIf(s, logPII)`。**「名字承诺脱敏、行为只是截断」比没有这道防线更危险** —— 它让审阅者以为已经防住了。修法：要么真实实现（与上行同做），要么改名（如 `truncateLog`）并把「不脱敏」写进注释。**本轮只标注，未改** |
 | — | 截断按**字节**切，会把 UTF-8 字符切成半个 | ⏸ **待定**（`Specs/06` #39，低） | 实测超长请求尾部为 `充填充填充…[truncated]`（`�` 即半个字符，JSON 编码后变 U+FFFD）。修法：按 rune 边界回退（`utf8.RuneStart`）—— 属打磨项，无功能影响 |
+| — | **4 处代码注释/测试名仍写「trie」**（文档侧已清，代码侧未动） | ⏸ **待定**（`Specs/06` #40 注释侧） | `internal/proxy/proxy.go:4`（「还原走流式 trie」）、`pkg/types/vault.go:101`（「用它做 trie 匹配」）、`internal/config/config.go:183`（「SSE trie 缓冲还原」）、`internal/replacer/replacer_test.go:117`（`TestStreamRestore_Trie` 的注释）。**纯注释，零行为影响** —— 本轮按拍板「代码一行未动（含注释）」未改，故 #40 的「无代码侧待办」仅指**功能侧**。修法极简（4 处改词），但注意**测试函数名 `TestStreamRestore_Trie` 若要一并改，需同步 `Specs/03` §1.3 的用例名**，否则文档与测试再次不一致 |
 
 ### 12.3 已声明的能力边界（**非缺陷**）
 
